@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 import anthropic
 from . import api_client
+from .whatsapp import enviar_mensaje as _enviar_msg
 
 # ── Cliente Anthropic ─────────────────────────────────────────
 client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
@@ -62,6 +63,7 @@ NOMBRE       = os.getenv("RESTAURANTE_NOMBRE",    "Yaykuna — La Cocina Maestra
 DIRECCION    = os.getenv("RESTAURANTE_DIRECCION", "Del Parque 76, Santiago, Chile")
 TEL          = os.getenv("RESTAURANTE_TEL",       "+56 9 4649 1245")
 IG           = os.getenv("RESTAURANTE_IG",        "@yaykuna_restaurante")
+WA_LOCAL     = os.getenv("RESTAURANTE_WA_ID",     "")  # wa_id del número del local para notificaciones
 
 SYSTEM_PROMPT = f"""
 Eres el asistente virtual de **{NOMBRE}**, restaurante de cocina peruana auténtica ubicado en {DIRECCION}, Santiago, Chile.
@@ -187,10 +189,23 @@ Mocktails: El Regalón · Niña Bonita · La Garota
 ## TUS CAPACIDADES
 
 1. **Reservar mesa** — verificar disponibilidad y confirmar al instante
-2. **Responder sobre carta y precios** — toda la info está arriba
-3. **Buscar reservas existentes** — por número de teléfono del cliente
-4. **Cancelar reservas** — el cliente cancela con su número de teléfono
-5. **Info del restaurante** — horarios, dirección, estacionamiento, etc.
+2. **Pedido para llevar (takeaway)** — armar el carrito conversacionalmente y confirmar el pedido
+3. **Responder sobre carta y precios** — toda la info está arriba
+4. **Buscar reservas existentes** — por número de teléfono del cliente
+5. **Ver estado de pedido** — el cliente puede consultar sus pedidos recientes
+6. **Cancelar reservas** — el cliente cancela con su número de teléfono
+7. **Info del restaurante** — horarios, dirección, estacionamiento, etc.
+
+---
+## REGLAS DE PEDIDOS PARA LLEVAR
+
+- Solo pedidos **para retirar en el local** — no hacemos delivery
+- Recoge conversacionalmente: qué quiere pedir → confirmar ítems y cantidades → pedir nombre y teléfono → confirmar total → crear pedido
+- **SIEMPRE confirmar el resumen** con el cliente antes de llamar `crear_pedido`
+- El pago es **en caja al retirar** — no manejamos pagos online
+- Tiempo estimado: **20-30 minutos**
+- Usa los precios exactos de la carta de arriba
+- Si el cliente pide algo que no está en la carta, díselo y ofrece alternativas
 
 ---
 ## REGLAS DE RESERVA
@@ -287,6 +302,45 @@ TOOLS = [
         }
     },
     {
+        "name": "crear_pedido",
+        "description": (
+            "Crea un pedido para llevar (takeaway) cuando el cliente quiere pedir comida para retirar en el local. "
+            "Úsala solo cuando tengas TODOS los datos: nombre, teléfono, y al menos un ítem con nombre, precio y cantidad confirmados por el cliente. "
+            "El pago es en caja al momento de retirar. Tiempo estimado de espera: 20-30 minutos."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "nombre":   {"type": "string",  "description": "Nombre completo del cliente"},
+                "telefono": {"type": "string",  "description": "Teléfono del cliente"},
+                "items": {
+                    "type": "array",
+                    "description": "Lista de productos pedidos",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "nombre":   {"type": "string",  "description": "Nombre exacto del plato según la carta"},
+                            "precio":   {"type": "integer", "description": "Precio unitario en CLP (sin puntos ni símbolo $)"},
+                            "cantidad": {"type": "integer", "description": "Cantidad de unidades"}
+                        },
+                        "required": ["nombre", "precio", "cantidad"]
+                    }
+                },
+                "notas": {"type": "string", "description": "Instrucciones especiales (opcional, ej: sin cebolla)"}
+            },
+            "required": ["nombre", "telefono", "items"]
+        }
+    },
+    {
+        "name": "ver_mis_pedidos",
+        "description": "Muestra los pedidos recientes del cliente (últimas 24h) para que pueda ver el estado de su pedido.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
+    },
+    {
         "name": "escalar_al_admin",
         "description": "Notifica al equipo del restaurante sobre una consulta que el bot no puede resolver. Úsalo para quejas, eventos especiales, grupos grandes (+20 personas) o situaciones fuera de tu alcance.",
         "input_schema": {
@@ -328,6 +382,46 @@ async def ejecutar_herramienta(nombre: str, args: dict, wa_id: str) -> str:
 
         elif nombre == "cancelar_reserva":
             data = await api_client.cancelar_reserva(args["reserva_id"], args["telefono"])
+            return json.dumps(data, ensure_ascii=False)
+
+        elif nombre == "crear_pedido":
+            sesion  = _get_sesion(wa_id)
+            pedido  = await api_client.crear_pedido(
+                wa_id    = wa_id,
+                nombre   = args["nombre"],
+                telefono = args["telefono"],
+                items    = args["items"],
+                notas    = args.get("notas", ""),
+            )
+            pedido_id = pedido.get("id")
+
+            # Notificar al número del local por WhatsApp
+            if pedido_id and WA_LOCAL:
+                try:
+                    items_txt = "\n".join(
+                        f"  {it['cantidad']}× {it['nombre']} — ${it['precio']:,}".replace(",", ".")
+                        for it in args["items"]
+                    )
+                    total = sum(it["precio"] * it["cantidad"] for it in args["items"])
+                    notas_txt = f"\n📝 {args['notas']}" if args.get("notas") else ""
+                    aviso = (
+                        f"🛍️ *NUEVO PEDIDO #{pedido_id}* (Para llevar)\n"
+                        f"👤 {args['nombre']} · 📱 {args['telefono']}\n"
+                        f"─────────────────\n"
+                        f"{items_txt}\n"
+                        f"─────────────────\n"
+                        f"💰 *Total: ${total:,}*{notas_txt}\n"
+                        f"⏰ Pago en caja al retirar"
+                    ).replace(",", ".")
+                    await _enviar_msg(WA_LOCAL, aviso)
+                    await api_client.marcar_pedido_notificado(pedido_id)
+                except Exception as e:
+                    print(f"[Bot] ⚠️ No se pudo notificar al local: {e}")
+
+            return json.dumps(pedido, ensure_ascii=False)
+
+        elif nombre == "ver_mis_pedidos":
+            data = await api_client.ver_mis_pedidos(wa_id)
             return json.dumps(data, ensure_ascii=False)
 
         elif nombre == "escalar_al_admin":

@@ -114,6 +114,44 @@ async def confirmar_reserva(reserva_id: int) -> dict:
         return r.json()
 
 
+async def crear_pedido(wa_id: str, nombre: str, telefono: str, items: list, notas: str = "") -> dict:
+    """Crea un pedido para llevar (takeaway). items = [{nombre, precio, cantidad}]"""
+    headers = {"X-Bot-Secret": BOT_SECRET} if BOT_SECRET else {}
+    async with httpx.AsyncClient(timeout=15) as client:
+        r = await client.post(f"{API_URL}/pedidos/publico", json={
+            "wa_id":    wa_id,
+            "nombre":   nombre,
+            "telefono": telefono,
+            "items":    items,
+            "notas":    notas,
+        }, headers=headers)
+        r.raise_for_status()
+        return r.json()
+
+
+async def ver_mis_pedidos(wa_id: str) -> dict:
+    """Busca pedidos recientes del cliente por wa_id (últimas 24h)."""
+    headers = {"X-Bot-Secret": BOT_SECRET} if BOT_SECRET else {}
+    async with httpx.AsyncClient(timeout=10) as client:
+        r = await client.get(f"{API_URL}/pedidos/buscar", params={"wa_id": wa_id}, headers=headers)
+        r.raise_for_status()
+        return r.json()
+
+
+async def marcar_pedido_notificado(pedido_id: int) -> None:
+    """Marca el pedido como notificado al local (evita doble aviso)."""
+    headers = {"X-Bot-Secret": BOT_SECRET} if BOT_SECRET else {}
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            await client.put(
+                f"{API_URL}/pedidos/{pedido_id}/notificado",
+                json={},
+                headers={**headers, "X-HTTP-Method-Override": "PUT"}
+            )
+    except Exception:
+        pass
+
+
 async def registrar_escalado(wa_id: str, motivo: str, mensaje: str, nombre: str = "") -> dict:
     """Registra un escalado al administrador en la base de datos."""
     headers = {"X-Bot-Secret": BOT_SECRET} if BOT_SECRET else {}
