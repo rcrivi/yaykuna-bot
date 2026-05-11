@@ -18,6 +18,25 @@ MODEL  = "claude-haiku-4-5-20251001"
 _sesiones: dict[str, dict] = {}
 SESSION_TTL_HORAS = 4  # Limpia sesión inactiva tras 4 horas
 
+# ── Cache de estado del bot ───────────────────────────────────
+_bot_activo_cache: dict = {"activo": True, "updated": None}
+BOT_ACTIVO_TTL = 60  # Refresca estado cada 60 segundos
+
+
+async def _bot_esta_activo() -> bool:
+    """Verifica si el bot está activo consultando la API. Cache de 60s."""
+    from datetime import datetime, timedelta
+    cache = _bot_activo_cache
+    if cache["updated"] and datetime.utcnow() - cache["updated"] < timedelta(seconds=BOT_ACTIVO_TTL):
+        return cache["activo"]
+    try:
+        data = await api_client.get_config_publico()
+        cache["activo"]  = data.get("bot_activo", True)
+        cache["updated"] = datetime.utcnow()
+    except Exception:
+        pass  # Si falla la API, dejamos el último valor conocido
+    return cache["activo"]
+
 
 def _limpiar_sesiones_viejas():
     limite = datetime.utcnow() - timedelta(hours=SESSION_TTL_HORAS)
@@ -334,6 +353,13 @@ async def procesar_mensaje(wa_id: str, texto: str) -> str:
     Procesa un mensaje entrante del cliente y retorna la respuesta del bot.
     Mantiene el historial de conversación en memoria.
     """
+    # Verificar si el bot está activo (cache de 60s)
+    if not await _bot_esta_activo():
+        return (
+            "⏸️ El bot está temporalmente pausado.\n"
+            f"Para consultas o reservas contáctanos directamente al {TEL} 🙏"
+        )
+
     sesion = _get_sesion(wa_id)
     sesion["updated"] = datetime.utcnow()
 
