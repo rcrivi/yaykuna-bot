@@ -66,11 +66,25 @@ async def marcar_leido(message_id: str) -> None:
 def verificar_firma(payload_bytes: bytes, firma_header: str) -> bool:
     """
     Verifica la firma HMAC-SHA256 que Meta incluye en cada webhook.
-    Protege contra peticiones falsas.
+    Protege contra peticiones falsas (spoofing).
+
+    IMPORTANTE: WHATSAPP_APP_SECRET DEBE estar configurada en producción.
+    Sin ella, todos los webhooks pasan — esto es un riesgo de seguridad.
     """
     app_secret = os.getenv("WHATSAPP_APP_SECRET", "")
     if not app_secret:
-        return True  # En desarrollo sin secret, permitir todo
+        # En producción esto es un error grave — loguearlo siempre
+        print(
+            "[SECURITY WARNING] WHATSAPP_APP_SECRET no está configurada. "
+            "Cualquier petición al webhook pasará sin verificación. "
+            "Configura esta variable en Railway para proteger el endpoint."
+        )
+        # Permitir en modo desarrollo, pero rechazar si NODE_ENV=production
+        env = os.getenv("ENVIRONMENT", os.getenv("RAILWAY_ENVIRONMENT", "development"))
+        if env in ("production", "prod"):
+            print("[SECURITY] Rechazando webhook — APP_SECRET requerida en producción.")
+            return False
+        return True  # Solo en desarrollo local
 
     if not firma_header or not firma_header.startswith("sha256="):
         return False

@@ -6,9 +6,10 @@ import httpx
 import os
 from typing import Optional
 
-API_URL  = os.getenv("RESERVAS_API_URL", "").rstrip("/")
-API_USER = os.getenv("RESERVAS_API_USER", "admin")
-API_PASS = os.getenv("RESERVAS_API_PASS", "")
+API_URL    = os.getenv("RESERVAS_API_URL", "").rstrip("/")
+API_USER   = os.getenv("RESERVAS_API_USER", "admin")
+API_PASS   = os.getenv("RESERVAS_API_PASS", "")
+BOT_SECRET = os.getenv("BOT_SECRET", "")  # Secreto compartido con la API PHP
 
 _token: Optional[str] = None
 
@@ -115,12 +116,13 @@ async def confirmar_reserva(reserva_id: int) -> dict:
 
 async def registrar_escalado(wa_id: str, motivo: str, mensaje: str, nombre: str = "") -> dict:
     """Registra un escalado al administrador en la base de datos."""
+    headers = {"X-Bot-Secret": BOT_SECRET} if BOT_SECRET else {}
     async with httpx.AsyncClient(timeout=10) as client:
         r = await client.post(f"{API_URL}/bot/escalado", json={
             "wa_id":   wa_id,
             "motivo":  motivo,
             "mensaje": mensaje,
             "nombre":  nombre,
-        })
+        }, headers=headers)
         # No hacer raise — si falla el registro no queremos romper el flujo
         return r.json() if r.status_code < 300 else {"ok": False}
