@@ -9,7 +9,6 @@ from datetime import datetime, timedelta
 from typing import Optional
 import anthropic
 from . import api_client
-from .whatsapp import enviar_mensaje as _enviar_msg
 
 # ── Cliente Anthropic ─────────────────────────────────────────
 client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
@@ -413,7 +412,8 @@ async def ejecutar_herramienta(nombre: str, args: dict, wa_id: str) -> str:
                         f"💰 *Total: ${total:,}*{notas_txt}\n"
                         f"⏰ Pago en caja al retirar"
                     ).replace(",", ".")
-                    await _enviar_msg(WA_LOCAL, aviso)
+                    from .whatsapp import enviar_mensaje
+                    await enviar_mensaje(WA_LOCAL, aviso)
                     await api_client.marcar_pedido_notificado(pedido_id)
                 except Exception as e:
                     print(f"[Bot] ⚠️ No se pudo notificar al local: {e}")
