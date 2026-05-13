@@ -152,6 +152,37 @@ async def marcar_pedido_notificado(pedido_id: int) -> None:
         pass
 
 
+async def registrar_mensaje(wa_id: str, nombre: str, direccion: str, mensaje: str,
+                            origen: str = "bot", meta_message_id: str = "") -> None:
+    """Guarda un mensaje en la BD del inbox WhatsApp. No lanza excepción si falla."""
+    headers = {"X-Bot-Secret": BOT_SECRET} if BOT_SECRET else {}
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            await client.post(f"{API_URL}/wa/mensajes/registrar", json={
+                "wa_id":            wa_id,
+                "nombre":           nombre,
+                "direccion":        direccion,   # "entrante" | "saliente"
+                "mensaje":          mensaje,
+                "origen":           origen,       # "bot" | "humano"
+                "meta_message_id":  meta_message_id,
+            }, headers=headers)
+    except Exception:
+        pass  # El inbox no debe romper el flujo del bot
+
+
+async def bajo_control_humano(wa_id: str) -> bool:
+    """Verifica si la conversación está bajo control humano (bot pausado para este cliente)."""
+    headers = {"X-Bot-Secret": BOT_SECRET} if BOT_SECRET else {}
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            r = await client.get(f"{API_URL}/wa/conversaciones/{wa_id}/control", headers=headers)
+            if r.status_code == 200:
+                return r.json().get("control_humano", False)
+    except Exception:
+        pass
+    return False
+
+
 async def registrar_escalado(wa_id: str, motivo: str, mensaje: str, nombre: str = "") -> dict:
     """Registra un escalado al administrador en la base de datos."""
     headers = {"X-Bot-Secret": BOT_SECRET} if BOT_SECRET else {}

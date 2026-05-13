@@ -17,6 +17,7 @@ load_dotenv()
 
 from .bot import procesar_mensaje
 from .whatsapp import enviar_mensaje, marcar_leido, verificar_firma, extraer_mensaje
+from .api_client import registrar_mensaje, bajo_control_humano
 
 VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN", "yaykuna_bot_2026")
 
@@ -69,6 +70,31 @@ async def verificar_webhook(request: Request):
     raise HTTPException(status_code=403, detail="Token inválido")
 
 
+BOT_SECRET = os.getenv("BOT_SECRET", "")
+
+
+# ── Envío de mensaje manual (llamado por el panel PHP) ────────
+@app.post("/send-message")
+async def send_message(request: Request):
+    """Permite al panel enviar mensajes manuales a través del bot."""
+    secret = request.headers.get("X-Bot-Secret", "")
+    if BOT_SECRET and secret != BOT_SECRET:
+        raise HTTPException(status_code=403, detail="Secreto inválido")
+
+    body    = await request.json()
+    wa_id   = body.get("wa_id", "").strip()
+    mensaje = body.get("mensaje", "").strip()
+
+    if not wa_id or not mensaje:
+        raise HTTPException(status_code=400, detail="wa_id y mensaje son requeridos")
+
+    ok = await enviar_mensaje(wa_id, mensaje)
+    if not ok:
+        raise HTTPException(status_code=502, detail="Error enviando mensaje a WhatsApp")
+
+    return {"ok": True}
+
+
 # ── Recepción de mensajes ──────────────────────────────────────
 @app.post("/webhook")
 async def recibir_mensaje(request: Request):
@@ -105,9 +131,24 @@ async def _procesar_en_background(body: dict):
 
     print(f"[Bot] 📩 {wa_id}: {texto[:80]}")
 
+    # Extraer nombre del cliente del payload (si viene)
+    try:
+        nombre = body["entry"][0]["changes"][0]["value"]["contacts"][0]["profile"]["name"]
+    except (KeyError, IndexError):
+        nombre = wa_id
+
     try:
         # Marcar como leído
         await marcar_leido(message_id)
+
+        # Guardar mensaje entrante en el inbox
+        await registrar_mensaje(wa_id, nombre, "entrante", texto,
+                                origen="bot", meta_message_id=message_id)
+
+        # Verificar si está bajo control humano — si es así, no responder
+        if await bajo_control_humano(wa_id):
+            print(f"[Bot] ⏸️ {wa_id} bajo control humano — mensaje guardado, sin respuesta del bot")
+            return
 
         # Procesar con Claude
         respuesta = await procesar_mensaje(wa_id, texto)
@@ -116,12 +157,13 @@ async def _procesar_en_background(body: dict):
         ok = await enviar_mensaje(wa_id, respuesta)
         if ok:
             print(f"[Bot] ✅ Respuesta enviada a {wa_id}")
+            # Guardar respuesta del bot en el inbox
+            await registrar_mensaje(wa_id, nombre, "saliente", respuesta, origen="bot")
         else:
             print(f"[Bot] ❌ Error enviando respuesta a {wa_id}")
 
     except Exception as e:
         print(f"[Bot] ❌ Error procesando mensaje de {wa_id}: {e}")
-        # Intentar enviar mensaje de error genérico
         try:
             await enviar_mensaje(
                 wa_id,
