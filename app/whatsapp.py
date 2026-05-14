@@ -46,6 +46,67 @@ async def enviar_mensaje(to: str, texto: str) -> bool:
         return False
 
 
+async def enviar_carta_interactiva(to: str) -> bool:
+    """
+    Envía la carta como dos mensajes interactivos con botones CTA URL.
+    El cliente ve un botón sin URL visible que abre la carta al tocarlo.
+    """
+    if not PHONE_ID or not TOKEN:
+        return False
+
+    headers = {
+        "Authorization": f"Bearer {TOKEN}",
+        "Content-Type":  "application/json"
+    }
+
+    mensajes = [
+        {
+            "messaging_product": "whatsapp",
+            "to":   to,
+            "type": "interactive",
+            "interactive": {
+                "type": "cta_url",
+                "body": {"text": "Aquí tienes nuestra carta completa 😊"},
+                "action": {
+                    "name": "cta_url",
+                    "parameters": {
+                        "display_text": "🌐 Ver carta online",
+                        "url": "https://yaykuna.cl/carta.html"
+                    }
+                }
+            }
+        },
+        {
+            "messaging_product": "whatsapp",
+            "to":   to,
+            "type": "interactive",
+            "interactive": {
+                "type": "cta_url",
+                "body": {"text": "También disponible para descargar:"},
+                "action": {
+                    "name": "cta_url",
+                    "parameters": {
+                        "display_text": "📄 Descargar PDF",
+                        "url": "https://yaykuna.cl/Carta/Cartayaykuna.pdf"
+                    }
+                }
+            }
+        }
+    ]
+
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            for payload in mensajes:
+                r = await client.post(API_URL, json=payload, headers=headers)
+                if r.status_code != 200:
+                    print(f"[WhatsApp] Error carta interactiva {r.status_code}: {r.text}")
+                    return False
+        return True
+    except Exception as e:
+        print(f"[WhatsApp] Excepción enviando carta: {e}")
+        return False
+
+
 async def marcar_leido(message_id: str) -> None:
     """Marca el mensaje como leído (doble check azul)."""
     if not PHONE_ID or not TOKEN:

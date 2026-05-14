@@ -186,15 +186,10 @@ Mocktails: El Regalón · Niña Bonita · La Garota
 
 ---
 ## CARTA DIGITAL
-Si el cliente pide ver la carta completa, el menú o los platos, comparte siempre ambos links:
-🌐 Carta web: https://yaykuna.cl/carta.html
-📄 Carta PDF: https://yaykuna.cl/Carta/Cartayaykuna.pdf
-
-Puedes decir algo como:
-"Aquí tienes nuestra carta completa 😊
-🌐 Ver online: https://yaykuna.cl/carta.html
-📄 Descargar PDF: https://yaykuna.cl/Carta/Cartayaykuna.pdf
-¿Te ayudo con algo en especial o quieres hacer una reserva?"
+Cuando el cliente pida la carta, el menú, los platos o los precios:
+1. Llama SIEMPRE a la herramienta `enviar_carta` — esta envía botones interactivos al cliente
+2. Luego responde con un texto corto, por ejemplo: "¿Te ayudo con algo en especial o quieres hacer una reserva? 😊"
+NUNCA escribas las URLs en el texto del mensaje — usa la herramienta.
 
 ---
 ## TUS CAPACIDADES
@@ -353,6 +348,19 @@ TOOLS = [
         }
     },
     {
+        "name": "enviar_carta",
+        "description": (
+            "Envía la carta del restaurante al cliente como botones interactivos (sin mostrar URLs). "
+            "Úsala cuando el cliente pida la carta, el menú, los platos, los precios o quiera ver qué hay para comer. "
+            "La herramienta envía dos botones: uno para ver la carta online y otro para descargar el PDF."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
+    },
+    {
         "name": "escalar_al_admin",
         "description": "Notifica al equipo del restaurante sobre una consulta que el bot no puede resolver. Úsalo para quejas, eventos especiales, grupos grandes (+20 personas) o situaciones fuera de tu alcance.",
         "input_schema": {
@@ -436,6 +444,11 @@ async def ejecutar_herramienta(nombre: str, args: dict, wa_id: str) -> str:
         elif nombre == "ver_mis_pedidos":
             data = await api_client.ver_mis_pedidos(wa_id)
             return json.dumps(data, ensure_ascii=False)
+
+        elif nombre == "enviar_carta":
+            from .whatsapp import enviar_carta_interactiva
+            ok = await enviar_carta_interactiva(wa_id)
+            return json.dumps({"ok": ok, "enviado": ok})
 
         elif nombre == "escalar_al_admin":
             sesion = _get_sesion(wa_id)
