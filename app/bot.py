@@ -6,9 +6,53 @@ las llamadas a Claude con las herramientas de la API de reservas.
 import os
 import json
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from typing import Optional
 import anthropic
 from . import api_client
+
+CHILE_TZ = ZoneInfo("America/Santiago")
+
+
+def _ahora_chile() -> datetime:
+    return datetime.now(CHILE_TZ)
+
+
+def _restaurante_abierto(ahora: datetime) -> bool:
+    """True si el restaurante está en horario de atención."""
+    minutos = ahora.hour * 60 + ahora.minute
+    apertura = 12 * 60 + 30   # 12:30
+    cierre   = 17 * 60 if ahora.weekday() == 6 else 23 * 60  # Dom 17:00 / resto 23:00
+    return apertura <= minutos < cierre
+
+
+def _contexto_dinamico(nombre_cliente: str = "", es_conocido: bool = False) -> str:
+    """Genera el bloque de contexto actual (hora, estado restaurante, cliente)."""
+    ahora     = _ahora_chile()
+    dias      = ["Lunes","Martes","Miércoles","Jueves","Viernes","Sábado","Domingo"]
+    dia       = dias[ahora.weekday()]
+    es_dom    = ahora.weekday() == 6
+    horario   = "12:30–17:00 hrs (Domingo)" if es_dom else "12:30–23:00 hrs"
+    abierto   = _restaurante_abierto(ahora)
+    estado    = "✅ ABIERTO" if abierto else "🔴 CERRADO"
+    hora_abre = "12:30 hrs"
+    hora_cierre = "17:00 hrs" if es_dom else "23:00 hrs"
+
+    ctx = f"""
+---
+## CONTEXTO ACTUAL (se actualiza en cada mensaje)
+- **Fecha:** {dia} {ahora.strftime('%d/%m/%Y')}
+- **Hora Chile:** {ahora.strftime('%H:%M')} hrs
+- **Horario hoy:** {horario}
+- **Restaurante:** {estado}
+- **Abre:** {hora_abre} · **Cierra:** {hora_cierre}
+"""
+    if nombre_cliente and es_conocido:
+        ctx += f"- **Cliente identificado:** {nombre_cliente} — ya nos escribió antes, salúdalo por su nombre al inicio de la conversación.\n"
+    elif nombre_cliente:
+        ctx += f"- **Nombre del cliente:** {nombre_cliente}\n"
+
+    return ctx
 
 # ── Cliente Anthropic ─────────────────────────────────────────
 client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
@@ -210,9 +254,21 @@ NUNCA escribas las URLs en el texto del mensaje — usa la herramienta.
 - Recoge conversacionalmente: qué quiere pedir → confirmar ítems y cantidades → pedir nombre y teléfono → confirmar total → crear pedido
 - **SIEMPRE confirmar el resumen** con el cliente antes de llamar `crear_pedido`
 - El pago es **en caja al retirar** — no manejamos pagos online
-- Tiempo estimado: **20-30 minutos**
 - Usa los precios exactos de la carta de arriba
 - Si el cliente pide algo que no está en la carta, díselo y ofrece alternativas
+
+### ⏰ VALIDACIÓN DE HORARIO (MUY IMPORTANTE)
+Antes de aceptar o confirmar cualquier pedido para llevar, revisa el CONTEXTO ACTUAL:
+
+- Si el restaurante está **CERRADO** en este momento:
+  → NO digas "listo para retirar en 20-30 minutos"
+  → Dile: "En este momento estamos cerrados, abrimos a las 12:30 hrs 🕧"
+  → Ofrece opciones: (a) tomar el pedido para tenerlo listo cuando abran, o (b) que llame cuando estén abiertos
+  → Si acepta opción (a), registra en las notas del pedido el horario de retiro deseado
+
+- Si el restaurante está **ABIERTO**:
+  → Tiempo estimado de preparación: **20-30 minutos**
+  → Si el cliente quiere retirar más tarde (ej: "lo paso a buscar en 2 horas"), acéptalo y regístralo en las notas
 
 ---
 ## REGLAS DE RESERVA
@@ -468,10 +524,11 @@ async def ejecutar_herramienta(nombre: str, args: dict, wa_id: str) -> str:
 
 
 # ── Función principal ─────────────────────────────────────────
-async def procesar_mensaje(wa_id: str, texto: str) -> str:
+async def procesar_mensaje(wa_id: str, texto: str, nombre: str = "") -> str:
     """
     Procesa un mensaje entrante del cliente y retorna la respuesta del bot.
     Mantiene el historial de conversación en memoria.
+    nombre: nombre del cliente extraído del payload de Meta.
     """
     # Verificar si el bot está activo (cache de 60s)
     if not await _bot_esta_activo():
@@ -483,6 +540,20 @@ async def procesar_mensaje(wa_id: str, texto: str) -> str:
     sesion = _get_sesion(wa_id)
     sesion["updated"] = datetime.utcnow()
 
+    # ── Reconocimiento del cliente ────────────────────────────
+    # Si tenemos nombre y la sesión es nueva (sin historial), marcarlo como conocido
+    es_cliente_conocido = False
+    if nombre and nombre != wa_id:
+        if not sesion.get("nombre"):
+            # Primera vez en esta sesión — puede ser cliente que vuelve
+            sesion["nombre"]     = nombre
+            es_cliente_conocido  = bool(sesion.get("messages"))  # True si ya tenía historial previo
+            # En sesión nueva siempre saludamos por nombre si lo tenemos
+            es_cliente_conocido  = True
+        nombre_sesion = sesion["nombre"]
+    else:
+        nombre_sesion = sesion.get("nombre", "")
+
     # Agregar mensaje del usuario al historial
     sesion["messages"].append({"role": "user", "content": texto})
 
@@ -490,13 +561,16 @@ async def procesar_mensaje(wa_id: str, texto: str) -> str:
     if len(sesion["messages"]) > 20:
         sesion["messages"] = sesion["messages"][-20:]
 
+    # ── System prompt dinámico (hora actual + cliente) ────────
+    system_dinamico = SYSTEM_PROMPT + _contexto_dinamico(nombre_sesion, es_cliente_conocido)
+
     # ── Bucle de agente con herramientas ─────────────────────
     max_iteraciones = 5
     for _ in range(max_iteraciones):
         response = await client.messages.create(
             model      = MODEL,
             max_tokens = 1024,
-            system     = SYSTEM_PROMPT,
+            system     = system_dinamico,
             tools      = TOOLS,
             messages   = sesion["messages"]
         )

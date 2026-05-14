@@ -150,8 +150,8 @@ async def _procesar_en_background(body: dict):
             print(f"[Bot] ⏸️ {wa_id} bajo control humano — mensaje guardado, sin respuesta del bot")
             return
 
-        # Procesar con Claude
-        respuesta = await procesar_mensaje(wa_id, texto)
+        # Procesar con Claude (pasamos el nombre para reconocimiento del cliente)
+        respuesta = await procesar_mensaje(wa_id, texto, nombre=nombre)
 
         # Enviar respuesta al cliente
         ok = await enviar_mensaje(wa_id, respuesta)
