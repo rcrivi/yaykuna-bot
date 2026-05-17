@@ -17,7 +17,7 @@ load_dotenv()
 
 from .bot import procesar_mensaje
 from .whatsapp import enviar_mensaje, marcar_leido, verificar_firma, extraer_mensaje
-from .api_client import registrar_mensaje, bajo_control_humano
+from .api_client import registrar_mensaje, bajo_control_humano, get_flujo_config
 
 VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN", "yaykuna_bot_2026")
 
@@ -25,10 +25,90 @@ VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN", "yaykuna_bot_2026")
 _procesados: set[str] = set()
 
 
+# Cache de config de flujo (se refresca cada 5 min)
+_flujo_config: dict = {"flujo_activo": 1, "flujo_followup_reserva": 7, "flujo_followup_pedido": 3}
+_flujo_task: asyncio.Task | None = None
+
+
+async def _loop_followup():
+    """Revisa cada 60s las sesiones inactivas y envía follow-up si corresponde."""
+    global _flujo_config
+    from .bot import _sesiones
+    from datetime import datetime, timedelta
+
+    config_actualizado = None
+
+    while True:
+        await asyncio.sleep(60)
+        try:
+            # Refrescar config cada 5 minutos
+            ahora = datetime.utcnow()
+            if config_actualizado is None or (ahora - config_actualizado).seconds > 300:
+                _flujo_config = await get_flujo_config()
+                config_actualizado = ahora
+
+            if not _flujo_config.get("flujo_activo", 1):
+                continue  # Follow-up desactivado desde el panel
+
+            min_reserva = int(_flujo_config.get("flujo_followup_reserva", 7))
+            min_pedido  = int(_flujo_config.get("flujo_followup_pedido",  3))
+
+            for wa_id, sesion in list(_sesiones.items()):
+                msgs = sesion.get("messages", [])
+                if not msgs:
+                    continue
+
+                ultimo = msgs[-1]
+                # Solo actuar si el último mensaje fue del bot (cliente no respondió)
+                if ultimo.get("role") != "assistant":
+                    continue
+
+                # Ya se envió follow-up para esta sesión
+                if sesion.get("followup_enviado"):
+                    continue
+
+                inactivo_min = (datetime.utcnow() - sesion["updated"]).seconds // 60
+
+                # Detectar si hay reserva o pedido en curso
+                historial = " ".join(
+                    (m.get("content") or "") if isinstance(m.get("content"), str)
+                    else " ".join(b.get("text","") for b in (m.get("content") or []) if isinstance(b, dict))
+                    for m in msgs
+                )
+                es_pedido  = any(w in historial.lower() for w in ["pedido","llevar","takeaway","carrito","items","plato"])
+                es_reserva = any(w in historial.lower() for w in ["reserva","mesa","personas","fecha","hora","sector"])
+
+                if not (es_pedido or es_reserva):
+                    continue
+
+                limite = min_pedido if es_pedido else min_reserva
+
+                if inactivo_min >= limite:
+                    tipo = "pedido" if es_pedido else "reserva"
+                    msg_followup = (
+                        f"¿Sigues por aquí? 😊 Cuando quieras continuamos con tu {tipo}."
+                    )
+                    try:
+                        ok = await enviar_mensaje(wa_id, msg_followup)
+                        if ok:
+                            sesion["followup_enviado"] = True
+                            await registrar_mensaje(wa_id, sesion.get("nombre",""), "saliente", msg_followup, origen="bot")
+                            print(f"[Flujo] ⏰ Follow-up enviado a {wa_id} ({tipo}, {inactivo_min} min inactivo)")
+                    except Exception as e:
+                        print(f"[Flujo] ❌ Error enviando follow-up a {wa_id}: {e}")
+
+        except Exception as e:
+            print(f"[Flujo] ❌ Error en loop: {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global _flujo_task
     print(f"[Yaykuna Bot] 🍽️  Iniciando servidor...")
+    _flujo_task = asyncio.create_task(_loop_followup())
     yield
+    if _flujo_task:
+        _flujo_task.cancel()
     print(f"[Yaykuna Bot] Apagando servidor.")
 
 
@@ -120,6 +200,11 @@ async def _procesar_en_background(body: dict):
         return  # No es un mensaje de texto, ignorar
 
     wa_id, message_id, texto = resultado
+
+    # Reset follow-up al recibir nuevo mensaje del cliente
+    from .bot import _sesiones
+    if wa_id in _sesiones:
+        _sesiones[wa_id]["followup_enviado"] = False
 
     # Evitar procesar el mismo mensaje dos veces (Meta puede reintentar)
     if message_id in _procesados:

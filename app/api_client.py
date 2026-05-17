@@ -183,6 +183,20 @@ async def bajo_control_humano(wa_id: str) -> bool:
     return False
 
 
+async def get_flujo_config() -> dict:
+    """Lee la configuración de follow-up desde la API (con cache interno)."""
+    headers = {"X-Bot-Secret": BOT_SECRET} if BOT_SECRET else {}
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            r = await client.get(f"{API_URL}/config/flujo/publico", headers=headers)
+            if r.status_code == 200:
+                return r.json()
+    except Exception:
+        pass
+    # Valores por defecto si la API no responde
+    return {"flujo_activo": 1, "flujo_followup_reserva": 7, "flujo_followup_pedido": 3}
+
+
 async def registrar_escalado(wa_id: str, motivo: str, mensaje: str, nombre: str = "") -> dict:
     """Registra un escalado al administrador en la base de datos."""
     headers = {"X-Bot-Secret": BOT_SECRET} if BOT_SECRET else {}
