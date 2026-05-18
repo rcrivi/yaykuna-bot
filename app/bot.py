@@ -58,9 +58,29 @@ def _contexto_dinamico(nombre_cliente: str = "", es_conocido: bool = False) -> s
 client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 MODEL  = "claude-haiku-4-5-20251001"
 
-# ── Sesiones en memoria (wa_id → {messages, nombre, idioma, updated}) ──
+# ── Sesiones en memoria (wa_id → {messages, nombre, idioma, updated, canal}) ──
 _sesiones: dict[str, dict] = {}
 SESSION_TTL_HORAS = 4  # Limpia sesión inactiva tras 4 horas
+
+# ── Cache de palabra clave presencial ────────────────────────
+_presencial_cache: dict = {"clave": "*mesa*", "updated": None}
+PRESENCIAL_TTL = 300  # Refresca cada 5 minutos
+
+async def _get_palabra_clave_presencial() -> str:
+    """Retorna la palabra clave configurada en el panel (cache de 5 min)."""
+    from datetime import datetime, timedelta
+    cache = _presencial_cache
+    if cache["updated"] and datetime.utcnow() - cache["updated"] < timedelta(seconds=PRESENCIAL_TTL):
+        return cache["clave"]
+    try:
+        data = await api_client.get_flujo_config()
+        clave = data.get("palabra_clave_presencial", "*mesa*").strip()
+        if clave:
+            cache["clave"]   = clave
+            cache["updated"] = datetime.utcnow()
+    except Exception:
+        pass
+    return cache["clave"]
 
 # ── Cache de estado del bot ───────────────────────────────────
 _bot_activo_cache: dict = {"activo": True, "updated": None}
@@ -584,8 +604,9 @@ async def ejecutar_herramienta(nombre: str, args: dict, wa_id: str) -> str:
             return json.dumps(data, ensure_ascii=False)
 
         elif nombre == "crear_reserva":
-            # 1. Crear en estado pending
-            reserva = await api_client.crear_reserva_publica(args)
+            # 1. Crear en estado pending (canal WhatsApp o Presencial según sesión)
+            canal   = _get_sesion(wa_id).get("canal", "WhatsApp")
+            reserva = await api_client.crear_reserva_publica(args, canal=canal)
             reserva_id = reserva.get("id")
             # 2. Confirmar inmediatamente
             if reserva_id:
@@ -684,6 +705,16 @@ async def procesar_mensaje(wa_id: str, texto: str, nombre: str = "") -> str:
     sesion = _get_sesion(wa_id)
     sesion["updated"] = datetime.utcnow()
 
+    # ── Detección de modo presencial ──────────────────────────
+    clave_presencial = await _get_palabra_clave_presencial()
+    if texto.strip().lower() == clave_presencial.strip().lower():
+        sesion["canal"] = "Presencial"
+        return (
+            "✅ *Modo presencial activado*\n\n"
+            "Hola, estoy listo para ayudarte con la reserva desde el local 🍽️\n"
+            "¿Para cuántas personas y qué fecha/hora tienes en mente?"
+        )
+
     # ── Reconocimiento del cliente ────────────────────────────
     # Si tenemos nombre y la sesión es nueva (sin historial), marcarlo como conocido
     es_cliente_conocido = False
@@ -720,44 +751,3 @@ async def procesar_mensaje(wa_id: str, texto: str, nombre: str = "") -> str:
         )
 
         # Si Claude quiere usar herramientas
-        if response.stop_reason == "tool_use":
-            # Agregar respuesta de Claude al historial
-            sesion["messages"].append({
-                "role":    "assistant",
-                "content": response.content
-            })
-
-            # Ejecutar cada herramienta solicitada
-            tool_results = []
-            for block in response.content:
-                if block.type == "tool_use":
-                    resultado = await ejecutar_herramienta(block.name, block.input, wa_id)
-                    tool_results.append({
-                        "type":        "tool_result",
-                        "tool_use_id": block.id,
-                        "content":     resultado
-                    })
-
-            # Agregar resultados al historial y continuar el bucle
-            sesion["messages"].append({
-                "role":    "user",
-                "content": tool_results
-            })
-            continue
-
-        # Claude terminó — extraer texto de respuesta
-        texto_respuesta = ""
-        for block in response.content:
-            if hasattr(block, "text"):
-                texto_respuesta += block.text
-
-        # Guardar respuesta del bot en historial
-        sesion["messages"].append({
-            "role":    "assistant",
-            "content": texto_respuesta
-        })
-
-        return texto_respuesta.strip()
-
-    # Si se agotaron las iteraciones (no debería pasar)
-    return "Lo siento, tuve un problema procesando tu mensaje. Por favor intenta de nuevo 🙏"

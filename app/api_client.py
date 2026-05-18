@@ -52,9 +52,9 @@ async def get_disponibilidad(fecha: str) -> dict:
         return r.json()
 
 
-async def crear_reserva_publica(data: dict) -> dict:
-    """Crea reserva pública (status pending). Canal = WhatsApp."""
-    data["canal"] = "WhatsApp"
+async def crear_reserva_publica(data: dict, canal: str = "WhatsApp") -> dict:
+    """Crea reserva pública (status pending). Canal = WhatsApp o Presencial."""
+    data["canal"] = canal
     async with httpx.AsyncClient(timeout=10) as client:
         r = await client.post(f"{API_URL}/reservas/publico", json=data)
         r.raise_for_status()
@@ -194,7 +194,12 @@ async def get_flujo_config() -> dict:
     except Exception:
         pass
     # Valores por defecto si la API no responde
-    return {"flujo_activo": 1, "flujo_followup_reserva": 7, "flujo_followup_pedido": 3}
+    return {
+        "flujo_activo": 1,
+        "flujo_followup_reserva": 7,
+        "flujo_followup_pedido": 3,
+        "palabra_clave_presencial": "*mesa*",
+    }
 
 
 async def registrar_escalado(wa_id: str, motivo: str, mensaje: str, nombre: str = "") -> dict:
@@ -207,5 +212,4 @@ async def registrar_escalado(wa_id: str, motivo: str, mensaje: str, nombre: str 
             "mensaje": mensaje,
             "nombre":  nombre,
         }, headers=headers)
-        # No hacer raise — si falla el registro no queremos romper el flujo
-        return r.json() if r.status_code < 300 else {"ok": False}
+        # No hacer raise — si fa
