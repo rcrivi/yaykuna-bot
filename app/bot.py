@@ -709,11 +709,15 @@ async def procesar_mensaje(wa_id: str, texto: str, nombre: str = "") -> str:
     clave_presencial = await _get_palabra_clave_presencial()
     if texto.strip().lower() == clave_presencial.strip().lower():
         sesion["canal"] = "Presencial"
-        return (
+        respuesta_presencial = (
             "✅ *Modo presencial activado*\n\n"
             "Hola, estoy listo para ayudarte con la reserva desde el local 🍽️\n"
             "¿Para cuántas personas y qué fecha/hora tienes en mente?"
         )
+        # Guardar en historial para que Claude tenga contexto en el siguiente mensaje
+        sesion["messages"].append({"role": "user",      "content": "[Modo presencial activado por el personal del local]"})
+        sesion["messages"].append({"role": "assistant", "content": respuesta_presencial})
+        return respuesta_presencial
 
     # ── Reconocimiento del cliente ────────────────────────────
     # Si tenemos nombre y la sesión es nueva (sin historial), marcarlo como conocido
@@ -751,3 +755,47 @@ async def procesar_mensaje(wa_id: str, texto: str, nombre: str = "") -> str:
         )
 
         # Si Claude quiere usar herramientas
+        if response.stop_reason == "tool_use":
+            # Agregar respuesta de Claude al historial
+            sesion["messages"].append({
+                "role":    "assistant",
+                "content": response.content
+            })
+
+            # Ejecutar cada herramienta solicitada
+            tool_results = []
+            for block in response.content:
+                if block.type == "tool_use":
+                    resultado = await ejecutar_herramienta(block.name, block.input, wa_id)
+                    tool_results.append({
+                        "type":        "tool_result",
+                        "tool_use_id": block.id,
+                        "content":     resultado
+                    })
+
+            # Agregar resultados al historial y continuar el bucle
+            sesion["messages"].append({
+                "role":    "user",
+                "content": tool_results
+            })
+            continue
+
+        # Claude terminó — extraer texto de respuesta
+        texto_respuesta = ""
+        for block in response.content:
+            if hasattr(block, "text"):
+                texto_respuesta += block.text
+
+        # Guardar respuesta del bot en historial
+        sesion["messages"].append({
+            "role":    "assistant",
+            "content": texto_respuesta
+        })
+
+        texto_final = texto_respuesta.strip()
+        if not texto_final:
+            texto_final = "Disculpa, no entendí bien. ¿Puedes repetirlo? 🙏"
+        return texto_final
+
+    # Si se agotaron las iteraciones (no debería pasar)
+    return "Lo siento, tuve un problema procesando tu mensaje. Por favor intenta de nuevo 🙏"
