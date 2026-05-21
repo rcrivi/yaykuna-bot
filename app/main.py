@@ -1,258 +1,337 @@
 """
-Servidor FastAPI — punto de entrada del bot Yaykuna.
+Servidor FastAPI — Bot de reservas multi-restaurante.
 Maneja:
-  - GET  /webhook  → verificación de Meta
-  - POST /webhook  → mensajes entrantes de WhatsApp
-  - GET  /health   → health check de Railway
+  - GET  /webhook  -> verificacion de Meta
+  - POST /webhook  -> mensajes entrantes de WhatsApp (multi-tenant)
+  - GET  /health   -> health check de Railway
+  - POST /send-message -> envio manual desde el panel PHP
 """
 import os
+import json
 import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Response, HTTPException
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import PlainTextResponse, JSONResponse
+from fastapi.responses import PlainTextResponse
 from dotenv import load_dotenv
 
 load_dotenv()
 
-from .bot import procesar_mensaje
+from .bot import procesar_mensaje, _sesiones as _sesiones_bot
 from .whatsapp import enviar_mensaje, marcar_leido, verificar_firma, extraer_mensaje
-from .api_client import registrar_mensaje, bajo_control_humano, get_flujo_config
+from .api_client import ApiClient
 
-VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN", "yaykuna_bot_2026")
+# ── Configuracion multi-restaurante ───────────────────────────
+# Formato RESTAURANTES (variable de entorno JSON):
+# {
+#   "PHONE_NUMBER_ID_1": {
+#     "nombre":     "Restaurante Uno",
+#     "direccion":  "Calle 123, Santiago",
+#     "tel":        "+56 9 XXXX XXXX",
+#     "ig":         "@restaurante_uno",
+#     "wa_local":   "569XXXXXXXXX",        <- wa_id del local para notificaciones
+#     "api_url":    "https://uno.cl/api-reservas",
+#     "api_user":   "admin",
+#     "api_pass":   "Admin2026!",
+#     "bot_secret": "secreto_uno",
+#     "system_prompt": "..."               <- opcional, prompt personalizado
+#   },
+#   "PHONE_NUMBER_ID_2": { ... }
+# }
 
-# IDs de mensajes ya procesados (evitar duplicados)
+_RESTAURANTES_JSON = os.getenv("RESTAURANTES", "{}")
+try:
+    RESTAURANTES: dict = json.loads(_RESTAURANTES_JSON)
+except json.JSONDecodeError:
+    print("[Config] ERROR: Variable RESTAURANTES no es JSON valido. Usando modo single-tenant.")
+    RESTAURANTES = {}
+
+# Modo single-tenant (compatibilidad con instalacion original de Yaykuna)
+_SINGLE_PHONE_ID = os.getenv("WHATSAPP_PHONE_ID", "")
+if _SINGLE_PHONE_ID and _SINGLE_PHONE_ID not in RESTAURANTES:
+    RESTAURANTES[_SINGLE_PHONE_ID] = {
+        "nombre":     os.getenv("RESTAURANTE_NOMBRE",    "Restaurante"),
+        "direccion":  os.getenv("RESTAURANTE_DIRECCION", ""),
+        "tel":        os.getenv("RESTAURANTE_TEL",       ""),
+        "ig":         os.getenv("RESTAURANTE_IG",        ""),
+        "wa_local":   os.getenv("RESTAURANTE_WA_ID",     ""),
+        "api_url":    os.getenv("RESERVAS_API_URL",      ""),
+        "api_user":   os.getenv("RESERVAS_API_USER",     "admin"),
+        "api_pass":   os.getenv("RESERVAS_API_PASS",     ""),
+        "bot_secret": os.getenv("BOT_SECRET",            ""),
+    }
+
+# Crear instancias de ApiClient por restaurante
+_api_clients: dict[str, ApiClient] = {}
+for _pid, _cfg in RESTAURANTES.items():
+    _api_clients[_pid] = ApiClient(
+        api_url    = _cfg.get("api_url", ""),
+        api_user   = _cfg.get("api_user", "admin"),
+        api_pass   = _cfg.get("api_pass", ""),
+        bot_secret = _cfg.get("bot_secret", ""),
+    )
+
+VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN", "bot_reservas_2026")
+
+# IDs de mensajes procesados (evitar duplicados de Meta)
 _procesados: set[str] = set()
 
-
-# Cache de config de flujo (se refresca cada 5 min)
-_flujo_config: dict = {"flujo_activo": 1, "flujo_followup_reserva": 7, "flujo_followup_pedido": 3}
+# Cache de config de flujo por restaurante
+_flujo_configs: dict[str, dict] = {}
 _flujo_task: asyncio.Task | None = None
 
 
+# ── Loop de follow-up (verifica sesiones inactivas) ───────────
+
 async def _loop_followup():
-    """Revisa cada 60s las sesiones inactivas y envía follow-up si corresponde."""
-    global _flujo_config
-    from .bot import _sesiones
+    """Revisa cada 60s las sesiones inactivas y envia follow-up si corresponde."""
     from datetime import datetime, timedelta
 
-    config_actualizado = None
+    config_actualizado: dict[str, datetime | None] = {pid: None for pid in RESTAURANTES}
 
     while True:
         await asyncio.sleep(60)
         try:
-            # Refrescar config cada 5 minutos
-            ahora = datetime.utcnow()
-            if config_actualizado is None or (ahora - config_actualizado).seconds > 300:
-                _flujo_config = await get_flujo_config()
-                config_actualizado = ahora
-
-            if not _flujo_config.get("flujo_activo", 1):
-                continue  # Follow-up desactivado desde el panel
-
-            min_reserva = int(_flujo_config.get("flujo_followup_reserva", 7))
-            min_pedido  = int(_flujo_config.get("flujo_followup_pedido",  3))
-
-            for wa_id, sesion in list(_sesiones.items()):
-                msgs = sesion.get("messages", [])
-                if not msgs:
+            for phone_id, rest_config in RESTAURANTES.items():
+                api = _api_clients.get(phone_id)
+                if not api:
                     continue
 
-                ultimo = msgs[-1]
-                # Solo actuar si el último mensaje fue del bot (cliente no respondió)
-                if ultimo.get("role") != "assistant":
+                # Refrescar config de flujo cada 5 min por restaurante
+                ahora = datetime.utcnow()
+                ultima = config_actualizado.get(phone_id)
+                if ultima is None or (ahora - ultima).seconds > 300:
+                    _flujo_configs[phone_id] = await api.get_flujo_config()
+                    config_actualizado[phone_id] = ahora
+
+                flujo = _flujo_configs.get(phone_id, {})
+                if not flujo.get("flujo_activo", 1):
                     continue
 
-                # Ya se envió follow-up para esta sesión
-                if sesion.get("followup_enviado"):
-                    continue
+                min_reserva = int(flujo.get("flujo_followup_reserva", 7))
+                min_pedido  = int(flujo.get("flujo_followup_pedido",  3))
 
-                inactivo_min = (datetime.utcnow() - sesion["updated"]).seconds // 60
+                # Solo procesar sesiones de ESTE restaurante
+                prefix = f"{phone_id}:"
+                for session_id, sesion in list(_sesiones_bot.items()):
+                    if not session_id.startswith(prefix):
+                        continue
 
-                # Detectar si hay reserva o pedido en curso
-                historial = " ".join(
-                    (m.get("content") or "") if isinstance(m.get("content"), str)
-                    else " ".join(b.get("text","") for b in (m.get("content") or []) if isinstance(b, dict))
-                    for m in msgs
-                )
-                es_pedido  = any(w in historial.lower() for w in ["pedido","llevar","takeaway","carrito","items","plato"])
-                es_reserva = any(w in historial.lower() for w in ["reserva","mesa","personas","fecha","hora","sector"])
+                    wa_id = session_id[len(prefix):]
+                    msgs  = sesion.get("messages", [])
+                    if not msgs:
+                        continue
 
-                if not (es_pedido or es_reserva):
-                    continue
+                    ultimo = msgs[-1]
+                    if ultimo.get("role") != "assistant":
+                        continue
+                    if sesion.get("followup_enviado"):
+                        continue
 
-                limite = min_pedido if es_pedido else min_reserva
+                    inactivo_min = (datetime.utcnow() - sesion["updated"]).seconds // 60
 
-                if inactivo_min >= limite:
-                    tipo = "pedido" if es_pedido else "reserva"
-                    msg_followup = (
-                        f"¿Sigues por aquí? 😊 Cuando quieras continuamos con tu {tipo}."
+                    historial = " ".join(
+                        (m.get("content") or "") if isinstance(m.get("content"), str)
+                        else " ".join(b.get("text", "") for b in (m.get("content") or []) if isinstance(b, dict))
+                        for m in msgs
                     )
-                    try:
-                        ok = await enviar_mensaje(wa_id, msg_followup)
-                        if ok:
-                            sesion["followup_enviado"] = True
-                            await registrar_mensaje(wa_id, sesion.get("nombre",""), "saliente", msg_followup, origen="bot")
-                            print(f"[Flujo] ⏰ Follow-up enviado a {wa_id} ({tipo}, {inactivo_min} min inactivo)")
-                    except Exception as e:
-                        print(f"[Flujo] ❌ Error enviando follow-up a {wa_id}: {e}")
+                    es_pedido  = any(w in historial.lower() for w in ["pedido","llevar","takeaway","carrito","items","plato"])
+                    es_reserva = any(w in historial.lower() for w in ["reserva","mesa","personas","fecha","hora","sector"])
+
+                    if not (es_pedido or es_reserva):
+                        continue
+
+                    limite = min_pedido if es_pedido else min_reserva
+                    if inactivo_min >= limite:
+                        tipo = "pedido" if es_pedido else "reserva"
+                        msg_followup = f"Sigues por ahi? Cuando quieras continuamos con tu {tipo}."
+                        try:
+                            ok = await enviar_mensaje(wa_id, msg_followup, phone_id=phone_id)
+                            if ok:
+                                sesion["followup_enviado"] = True
+                                await api.registrar_mensaje(
+                                    wa_id, sesion.get("nombre", ""), "saliente", msg_followup, origen="bot"
+                                )
+                                print(f"[Flujo] Followup enviado a {wa_id} ({tipo}, {inactivo_min} min)")
+                        except Exception as e:
+                            print(f"[Flujo] Error enviando followup a {wa_id}: {e}")
 
         except Exception as e:
-            print(f"[Flujo] ❌ Error en loop: {e}")
+            print(f"[Flujo] Error en loop: {e}")
 
+
+# ── Lifespan ──────────────────────────────────────────────────
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _flujo_task
-    print(f"[Yaykuna Bot] 🍽️  Iniciando servidor...")
+    restaurantes_activos = list(RESTAURANTES.keys())
+    print(f"[Bot] Iniciando servidor — {len(restaurantes_activos)} restaurante(s): {restaurantes_activos}")
     _flujo_task = asyncio.create_task(_loop_followup())
     yield
     if _flujo_task:
         _flujo_task.cancel()
-    print(f"[Yaykuna Bot] Apagando servidor.")
+    print("[Bot] Servidor apagado.")
 
 
 app = FastAPI(
-    title       = "Yaykuna WhatsApp Bot",
-    description = "Agente de reservas y atención al cliente para Yaykuna",
-    version     = "1.0.0",
+    title       = "Bot Reservas Multi-Restaurante",
+    description = "Agente WhatsApp de reservas — multi-tenant",
+    version     = "2.0.0",
     lifespan    = lifespan,
-    docs_url    = None,  # Desactivar docs en producción
+    docs_url    = None,
     redoc_url   = None,
 )
 
-
-# ── Servir el panel de administración ────────────────────────
+# Servir panel de administracion
 panel_path = os.path.join(os.path.dirname(__file__), "..", "panel")
 if os.path.isdir(panel_path):
     app.mount("/panel", StaticFiles(directory=panel_path, html=True), name="panel")
 
 
 # ── Health check ──────────────────────────────────────────────
+
 @app.get("/health")
 async def health():
-    return {"status": "ok", "bot": "Yaykuna Bot", "version": "1.0.0"}
+    return {
+        "status":       "ok",
+        "version":      "2.0.0",
+        "restaurantes": len(RESTAURANTES),
+    }
 
 
-# ── Verificación del webhook (Meta lo llama al configurar) ────
+# ── Verificacion del webhook ───────────────────────────────────
+
 @app.get("/webhook")
 async def verificar_webhook(request: Request):
-    params     = dict(request.query_params)
-    mode       = params.get("hub.mode")
-    token      = params.get("hub.verify_token")
-    challenge  = params.get("hub.challenge")
+    params    = dict(request.query_params)
+    mode      = params.get("hub.mode")
+    token     = params.get("hub.verify_token")
+    challenge = params.get("hub.challenge")
 
     if mode == "subscribe" and token == VERIFY_TOKEN:
-        print(f"[Webhook] ✅ Verificación exitosa")
+        print("[Webhook] Verificacion exitosa")
         return PlainTextResponse(challenge)
 
-    print(f"[Webhook] ❌ Token inválido: {token}")
-    raise HTTPException(status_code=403, detail="Token inválido")
+    print(f"[Webhook] Token invalido: {token}")
+    raise HTTPException(status_code=403, detail="Token invalido")
 
 
-BOT_SECRET = os.getenv("BOT_SECRET", "")
+# ── Envio manual desde el panel PHP ───────────────────────────
 
-
-# ── Envío de mensaje manual (llamado por el panel PHP) ────────
 @app.post("/send-message")
 async def send_message(request: Request):
-    """Permite al panel enviar mensajes manuales a través del bot."""
-    secret = request.headers.get("X-Bot-Secret", "")
-    if BOT_SECRET and secret != BOT_SECRET:
-        raise HTTPException(status_code=403, detail="Secreto inválido")
+    body       = await request.json()
+    phone_id   = body.get("phone_id", _SINGLE_PHONE_ID)
+    bot_secret = RESTAURANTES.get(phone_id, {}).get("bot_secret", "")
+    secret_hdr = request.headers.get("X-Bot-Secret", "")
 
-    body    = await request.json()
+    if bot_secret and secret_hdr != bot_secret:
+        raise HTTPException(status_code=403, detail="Secreto invalido")
+
     wa_id   = body.get("wa_id", "").strip()
     mensaje = body.get("mensaje", "").strip()
-
     if not wa_id or not mensaje:
         raise HTTPException(status_code=400, detail="wa_id y mensaje son requeridos")
 
-    ok = await enviar_mensaje(wa_id, mensaje)
+    ok = await enviar_mensaje(wa_id, mensaje, phone_id=phone_id)
     if not ok:
-        raise HTTPException(status_code=502, detail="Error enviando mensaje a WhatsApp")
-
+        raise HTTPException(status_code=502, detail="Error enviando mensaje")
     return {"ok": True}
 
 
-# ── Recepción de mensajes ──────────────────────────────────────
+# ── Recepcion de mensajes de Meta ─────────────────────────────
+
 @app.post("/webhook")
 async def recibir_mensaje(request: Request):
-    # Verificar firma de Meta
     firma   = request.headers.get("X-Hub-Signature-256", "")
     payload = await request.body()
 
     if not verificar_firma(payload, firma):
-        print("[Webhook] ❌ Firma inválida")
-        raise HTTPException(status_code=403, detail="Firma inválida")
+        print("[Webhook] Firma invalida")
+        raise HTTPException(status_code=403, detail="Firma invalida")
 
-    body = await request.json() if not payload else __import__("json").loads(payload)
-
-    # Meta espera 200 inmediatamente — procesamos en background
+    body = json.loads(payload)
     asyncio.create_task(_procesar_en_background(body))
     return Response(status_code=200)
 
 
 async def _procesar_en_background(body: dict):
-    """Procesa el mensaje en background para no bloquear el webhook."""
+    """Procesa el mensaje identificando el restaurante por phone_number_id."""
+    # Identificar restaurante
+    try:
+        phone_id = body["entry"][0]["changes"][0]["value"]["metadata"]["phone_number_id"]
+    except (KeyError, IndexError):
+        return
+
+    rest_config = RESTAURANTES.get(phone_id)
+    api         = _api_clients.get(phone_id)
+
+    if not rest_config or not api:
+        print(f"[Bot] Restaurante no configurado para phone_id={phone_id}")
+        return
+
     resultado = extraer_mensaje(body)
     if not resultado:
-        return  # No es un mensaje de texto, ignorar
+        return
 
     wa_id, message_id, texto = resultado
+    session_id = f"{phone_id}:{wa_id}"
 
-    # Reset follow-up al recibir nuevo mensaje del cliente
-    from .bot import _sesiones
-    if wa_id in _sesiones:
-        _sesiones[wa_id]["followup_enviado"] = False
+    # Reset follow-up al recibir nuevo mensaje
+    if session_id in _sesiones_bot:
+        _sesiones_bot[session_id]["followup_enviado"] = False
 
-    # Evitar procesar el mismo mensaje dos veces (Meta puede reintentar)
+    # Evitar duplicados
     if message_id in _procesados:
         return
     _procesados.add(message_id)
-    # Limpiar cache si crece demasiado
     if len(_procesados) > 1000:
         _procesados.clear()
 
-    print(f"[Bot] 📩 {wa_id}: {texto[:80]}")
+    restaurante_nombre = rest_config.get("nombre", "Restaurante")
+    print(f"[Bot] [{restaurante_nombre}] {wa_id}: {texto[:80]}")
 
-    # Extraer nombre del cliente del payload (si viene)
     try:
         nombre = body["entry"][0]["changes"][0]["value"]["contacts"][0]["profile"]["name"]
     except (KeyError, IndexError):
         nombre = wa_id
 
     try:
-        # Marcar como leído
-        await marcar_leido(message_id)
+        await marcar_leido(message_id, phone_id=phone_id)
 
-        # Guardar mensaje entrante en el inbox
-        await registrar_mensaje(wa_id, nombre, "entrante", texto,
-                                origen="bot", meta_message_id=message_id)
+        await api.registrar_mensaje(
+            wa_id, nombre, "entrante", texto,
+            origen="bot", meta_message_id=message_id
+        )
 
-        # Verificar si está bajo control humano — si es así, no responder
-        if await bajo_control_humano(wa_id):
-            print(f"[Bot] ⏸️ {wa_id} bajo control humano — mensaje guardado, sin respuesta del bot")
+        if await api.bajo_control_humano(wa_id):
+            print(f"[Bot] {wa_id} bajo control humano — sin respuesta del bot")
             return
 
-        # Procesar con Claude (pasamos el nombre para reconocimiento del cliente)
-        respuesta = await procesar_mensaje(wa_id, texto, nombre=nombre)
+        respuesta = await procesar_mensaje(
+            session_id  = session_id,
+            wa_id       = wa_id,
+            texto       = texto,
+            nombre      = nombre,
+            rest_config = rest_config,
+            api         = api,
+        )
 
-        # Enviar respuesta al cliente
-        ok = await enviar_mensaje(wa_id, respuesta)
+        ok = await enviar_mensaje(wa_id, respuesta, phone_id=phone_id)
         if ok:
-            print(f"[Bot] ✅ Respuesta enviada a {wa_id}")
-            # Guardar respuesta del bot en el inbox
-            await registrar_mensaje(wa_id, nombre, "saliente", respuesta, origen="bot")
+            print(f"[Bot] Respuesta enviada a {wa_id}")
+            await api.registrar_mensaje(wa_id, nombre, "saliente", respuesta, origen="bot")
         else:
-            print(f"[Bot] ❌ Error enviando respuesta a {wa_id}")
+            print(f"[Bot] Error enviando respuesta a {wa_id}")
 
     except Exception as e:
-        print(f"[Bot] ❌ Error procesando mensaje de {wa_id}: {e}")
+        print(f"[Bot] Error procesando mensaje de {wa_id}: {e}")
         try:
             await enviar_mensaje(
                 wa_id,
-                "Lo siento, tuve un problema técnico. Por favor intenta nuevamente en un momento 🙏"
+                "Lo siento, tuve un problema tecnico. Por favor intenta nuevamente en un momento.",
+                phone_id=phone_id
             )
         except Exception:
             pass
