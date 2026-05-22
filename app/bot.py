@@ -390,8 +390,15 @@ async def procesar_mensaje(session_id: str, wa_id: str, texto: str,
     if len(sesion["messages"]) > 20:
         sesion["messages"] = sesion["messages"][-20:]
 
-    system_base    = _build_system_prompt(rest_config)
-    system_dynamic = system_base + _contexto_dinamico(rest_config, nombre_sesion, es_cliente_conocido, config_pub)
+    # Fusionar carta_url y menu desde la API (DB) si no vienen en rest_config (env vars)
+    effective_config = dict(rest_config)
+    if config_pub.get("carta_url") and not effective_config.get("carta_url"):
+        effective_config["carta_url"] = config_pub["carta_url"]
+    if config_pub.get("menu") and not effective_config.get("menu"):
+        effective_config["menu"] = config_pub["menu"]
+
+    system_base    = _build_system_prompt(effective_config)
+    system_dynamic = system_base + _contexto_dinamico(effective_config, nombre_sesion, es_cliente_conocido, config_pub)
 
     max_iteraciones = 5
     for _ in range(max_iteraciones):
@@ -414,7 +421,7 @@ async def procesar_mensaje(session_id: str, wa_id: str, texto: str,
                 if block.type == "tool_use":
                     resultado = await ejecutar_herramienta(
                         block.name, block.input,
-                        session_id, wa_id, rest_config, api,
+                        session_id, wa_id, effective_config, api,
                         flujo_config=flujo
                     )
                     tool_results.append({
