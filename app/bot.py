@@ -111,6 +111,13 @@ def _build_system_prompt(rest_config: dict) -> str:
         "- Solicita mas de 20 personas\n\n"
         "Mensaje: \"Entiendo tu consulta. Voy a comunicarme con nuestro equipo y te responderemos a la brevedad.\"\n\n"
         "---\n"
+        "## PAGOS Y TRANSFERENCIA\n"
+        "- Si el resultado de crear_pedido incluye 'requiere_transferencia: true',\n"
+        "  DEBES informar al cliente que por el monto del pedido se requiere transferencia bancaria.\n"
+        "- Entrega los datos_transferencia que vienen en el resultado del pedido.\n"
+        "- Indica que el pedido quedara pendiente hasta confirmar el pago.\n"
+        "- El cliente puede tambien pagar en caja al retirar (si el local lo permite).\n\n"
+        "---\n"
         "## FORMATO DE RESPUESTAS\n"
         "- Respuestas cortas y directas (maximo 3-4 parrafos)\n"
         "- Sin Markdown complejo (no tablas, no encabezados #)\n"
@@ -247,7 +254,9 @@ TOOLS = [
 
 async def ejecutar_herramienta(nombre: str, args: dict,
                                 session_id: str, wa_id: str,
-                                rest_config: dict, api: ApiClient) -> str:
+                                rest_config: dict, api: ApiClient,
+                                flujo_config: dict = None) -> str:
+    flujo_config = flujo_config or {}
     try:
         if nombre == "verificar_disponibilidad":
             data = await api.get_disponibilidad(args["fecha"])
@@ -292,6 +301,36 @@ async def ejecutar_herramienta(nombre: str, args: dict,
             )
             return json.dumps({"ok": True, "escalado": True})
 
+        elif nombre == "crear_pedido":
+            # Calcular total del pedido para verificar si requiere transferencia
+            items = args.get("items", [])
+            total = sum(
+                int(it.get("precio", 0)) * int(it.get("cantidad", 1))
+                for it in items
+            )
+            monto_minimo = int(flujo_config.get("monto_transferencia", 0))
+            datos_transf = flujo_config.get("datos_transferencia", "").strip()
+
+            data = await api.crear_pedido(
+                wa_id    = wa_id,
+                nombre   = args.get("nombre", ""),
+                telefono = args.get("telefono", ""),
+                items    = items,
+                notas    = args.get("notas", ""),
+            )
+
+            # Si el pedido supera el monto configurado, agregar aviso de transferencia
+            if monto_minimo > 0 and total >= monto_minimo and datos_transf:
+                data["requiere_transferencia"] = True
+                data["monto_total"]            = total
+                data["datos_transferencia"]    = datos_transf
+                data["mensaje"] = (
+                    f"Pedido registrado. Por el monto (${total:,}), "
+                    "el local requiere pago por transferencia bancaria antes de ingresarlo a cocina."
+                )
+
+            return json.dumps(data, ensure_ascii=False)
+
         else:
             return json.dumps({"error": f"Herramienta '{nombre}' no reconocida"})
 
@@ -319,6 +358,7 @@ async def procesar_mensaje(session_id: str, wa_id: str, texto: str,
     sesion = _get_sesion(session_id)
     sesion["updated"] = datetime.utcnow()
 
+    flujo = {}
     try:
         flujo = await api.get_flujo_config()
         clave_presencial = flujo.get("palabra_clave_presencial", "*mesa*").strip()
@@ -374,7 +414,8 @@ async def procesar_mensaje(session_id: str, wa_id: str, texto: str,
                 if block.type == "tool_use":
                     resultado = await ejecutar_herramienta(
                         block.name, block.input,
-                        session_id, wa_id, rest_config, api
+                        session_id, wa_id, rest_config, api,
+                        flujo_config=flujo
                     )
                     tool_results.append({
                         "type":        "tool_result",
