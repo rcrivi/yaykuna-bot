@@ -111,6 +111,11 @@ def _build_system_prompt(rest_config: dict) -> str:
         "- Solicita mas de 20 personas\n\n"
         "Mensaje: \"Entiendo tu consulta. Voy a comunicarme con nuestro equipo y te responderemos a la brevedad.\"\n\n"
         "---\n"
+        "## PEDIDOS — REGLAS CRITICAS\n"
+        "- Cuando crear_pedido retorne exitosamente, SIEMPRE debes decirle al cliente su numero de pedido.\n"
+        "  El numero viene en el campo 'id' del resultado. Ejemplo: 'Tu numero de pedido es el #42'.\n"
+        "- NUNCA digas que el sistema no genero numero de pedido. El id SIEMPRE viene en la respuesta.\n"
+        "- Resume el pedido: items, total y hora de retiro.\n\n"
         "## PAGOS Y TRANSFERENCIA\n"
         "- Si el resultado de crear_pedido incluye 'requiere_transferencia: true',\n"
         "  DEBES informar al cliente que por el monto del pedido se requiere transferencia bancaria.\n"
@@ -122,6 +127,7 @@ def _build_system_prompt(rest_config: dict) -> str:
         "- Respuestas cortas y directas (maximo 3-4 parrafos)\n"
         "- Sin Markdown complejo (no tablas, no encabezados #)\n"
         "- Emojis con moderacion\n"
+        "- NUNCA pongas asteriscos (*) alrededor de una URL. Las URLs van siempre como texto plano, sin negritas ni formato. Ejemplo correcto: https://yaykuna.cl/carta.html — Ejemplo INCORRECTO: **https://yaykuna.cl/carta.html**\n"
     )
 
 
@@ -229,6 +235,33 @@ TOOLS = [
         }
     },
     {
+        "name": "crear_pedido",
+        "description": "Registra un pedido para llevar (takeaway). Llamar SOLO cuando el cliente haya confirmado todos los items, nombre, telefono y hora de retiro.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "nombre":      {"type": "string",  "description": "Nombre completo del cliente"},
+                "telefono":    {"type": "string",  "description": "Telefono de contacto"},
+                "hora_retiro": {"type": "string",  "description": "Hora estimada de retiro, ej: 13:00"},
+                "items": {
+                    "type": "array",
+                    "description": "Lista de productos pedidos",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "nombre":   {"type": "string",  "description": "Nombre del plato"},
+                            "precio":   {"type": "integer", "description": "Precio unitario en pesos"},
+                            "cantidad": {"type": "integer", "description": "Cantidad"}
+                        },
+                        "required": ["nombre", "precio", "cantidad"]
+                    }
+                },
+                "notas": {"type": "string", "description": "Observaciones adicionales del cliente"}
+            },
+            "required": ["nombre", "telefono", "hora_retiro", "items"]
+        }
+    },
+    {
         "name": "enviar_carta",
         "description": "Envia la carta del restaurante al cliente como botones interactivos. Usar cuando pida el menu o los precios.",
         "input_schema": {
@@ -311,12 +344,16 @@ async def ejecutar_herramienta(nombre: str, args: dict,
             monto_minimo = int(flujo_config.get("monto_transferencia", 0))
             datos_transf = flujo_config.get("datos_transferencia", "").strip()
 
+            hora_retiro = args.get("hora_retiro", "")
+            notas_extra = args.get("notas", "")
+            notas = f"Retiro: {hora_retiro}" + (f" | {notas_extra}" if notas_extra else "") if hora_retiro else notas_extra
+
             data = await api.crear_pedido(
                 wa_id    = wa_id,
                 nombre   = args.get("nombre", ""),
                 telefono = args.get("telefono", ""),
                 items    = items,
-                notas    = args.get("notas", ""),
+                notas    = notas,
             )
 
             # Si el pedido supera el monto configurado, agregar aviso de transferencia

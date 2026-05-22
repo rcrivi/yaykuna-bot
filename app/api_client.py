@@ -142,7 +142,7 @@ class ApiClient:
         try:
             async with httpx.AsyncClient(timeout=5) as client:
                 r = await client.get(
-                    f"{self._url}/bot/flujo-config",
+                    f"{self._url}/config/flujo/publico",
                     headers=self._bot_headers()
                 )
                 return r.json()
@@ -159,7 +159,7 @@ class ApiClient:
         try:
             async with httpx.AsyncClient(timeout=5) as client:
                 await client.post(
-                    f"{self._url}/bot/escalados",
+                    f"{self._url}/bot/escalado",
                     json={"wa_id": wa_id, "motivo": motivo,
                           "mensaje": mensaje, "nombre": nombre},
                     headers=self._bot_headers()
@@ -181,7 +181,8 @@ class ApiClient:
                     "items":    items,
                     "notas":    notas,
                     "canal":    "WhatsApp"
-                }
+                },
+                headers=self._bot_headers()
             )
             r.raise_for_status()
             return r.json()
@@ -190,8 +191,9 @@ class ApiClient:
         try:
             async with httpx.AsyncClient(timeout=5) as client:
                 r = await client.get(
-                    f"{self._url}/pedidos/publico",
-                    params={"wa_id": wa_id}
+                    f"{self._url}/pedidos/buscar",
+                    params={"wa_id": wa_id},
+                    headers=self._bot_headers()
                 )
                 return r.json()
         except Exception:
@@ -200,7 +202,7 @@ class ApiClient:
     async def marcar_pedido_notificado(self, pedido_id: int) -> None:
         try:
             async with httpx.AsyncClient(timeout=5) as client:
-                await client.post(
+                await client.put(
                     f"{self._url}/pedidos/{pedido_id}/notificado",
                     headers=self._bot_headers()
                 )
