@@ -120,7 +120,7 @@ class ApiClient:
         try:
             async with httpx.AsyncClient(timeout=5) as client:
                 await client.post(
-                    f"{self._url}/bot/mensajes",
+                    f"{self._url}/wa/mensajes/registrar",
                     json=data,
                     headers=self._bot_headers()
                 )
