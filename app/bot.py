@@ -1,5 +1,5 @@
 """
-Nucleo del agente de reservas — multi-restaurante.
+Nucleo del agente de reservas -- multi-restaurante.
 Mantiene sesiones separadas por restaurante (phone_id:wa_id).
 """
 import os
@@ -10,12 +10,12 @@ from typing import Optional
 import anthropic
 from .api_client import ApiClient
 
-# ── Cliente Anthropic ─────────────────────────────────────────
+# -- Cliente Anthropic
 client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 MODEL  = "claude-haiku-4-5-20251001"
 
-# ── Sesiones en memoria (session_id → dict) ───────────────────
-# session_id = "PHONE_ID:wa_id"  (unico por restaurante + cliente)
+# -- Sesiones en memoria (session_id -> dict)
+# session_id = "PHONE_ID:wa_id"
 _sesiones: dict[str, dict] = {}
 SESSION_TTL_HORAS = 4
 
@@ -40,12 +40,11 @@ def _get_sesion(session_id: str) -> dict:
     return _sesiones[session_id]
 
 
-# ── System Prompt por restaurante ─────────────────────────────
+# -- System Prompt por restaurante
 
 def _build_system_prompt(rest_config: dict) -> str:
     """Construye el system prompt usando config del restaurante."""
 
-    # Si el restaurante tiene prompt personalizado, usarlo directamente
     if rest_config.get("system_prompt"):
         return rest_config["system_prompt"]
 
@@ -53,7 +52,7 @@ def _build_system_prompt(rest_config: dict) -> str:
     direccion = rest_config.get("direccion", "")
     tel       = rest_config.get("tel",       "")
     ig        = rest_config.get("ig",        "")
-    horarios  = rest_config.get("horarios",  "Lunes a Sabado 12:30-23:00 hrs · Domingo 12:30-17:00 hrs")
+    horarios  = rest_config.get("horarios",  "Lunes a Sabado 12:30-23:00 hrs - Domingo 12:30-17:00 hrs")
     carta_url = rest_config.get("carta_url", "")
     menu_txt  = rest_config.get("menu", "")
 
@@ -75,7 +74,7 @@ Tu nombre es **{nombre} Bot**.
 ## PERSONALIDAD
 - Amable, cercano y eficiente
 - Detecta el idioma del cliente (espanol o ingles) y responde en ese idioma
-- Nunca inventes informacion — si no sabes algo, dilo con honestidad
+- Nunca inventes informacion -- si no sabes algo, dilo con honestidad
 - Usa emojis con moderacion para dar calidez
 
 ---
@@ -91,11 +90,11 @@ Tu nombre es **{nombre} Bot**.
 {carta_seccion}
 ---
 ## TUS CAPACIDADES
-1. **Reservar mesa** — verificar disponibilidad y confirmar al instante
+1. **Reservar mesa** -- verificar disponibilidad y confirmar al instante
 2. **Responder sobre carta y precios**
-3. **Buscar reservas existentes** — por numero de telefono
+3. **Buscar reservas existentes** -- por numero de telefono
 4. **Cancelar reservas**
-5. **Info del restaurante** — horarios, direccion, etc.
+5. **Info del restaurante** -- horarios, direccion, etc.
 
 ---
 ## REGLAS DE RESERVA
@@ -104,7 +103,7 @@ Tu nombre es **{nombre} Bot**.
 - Recolecta los datos de forma conversacional
 - El sector puede ser: Salon, Terraza, Bar o Privado
 - Canal siempre se registra como 'WhatsApp'
-- Maximo 20 personas — mas personas, escalar al admin
+- Maximo 20 personas -- mas personas, escalar al admin
 
 ---
 ## ESCALADO AL ADMINISTRADOR
@@ -123,7 +122,7 @@ Mensaje: "Entiendo tu consulta. Voy a comunicarme con nuestro equipo y te respon
 """
 
 
-# ── Contexto dinamico (hora actual) ──────────────────────────
+# -- Contexto dinamico (hora actual)
 
 def _contexto_dinamico(rest_config: dict, nombre_cliente: str = "",
                         es_conocido: bool = False,
@@ -149,22 +148,35 @@ def _contexto_dinamico(rest_config: dict, nombre_cliente: str = "",
         hora_cierre_hoy = config_pub.get("hora_cierre_hoy")
         pedidos_hoy     = config_pub.get("pedidos_hoy", True)
         if hora_cierre_hoy:
-            ctx += f"- **AVISO HOY:** El restaurante cierra a las {hora_cierre_hoy} hrs por evento especial.\n"
-            ctx += f"- **Horarios disponibles:** solo antes de las {hora_cierre_hoy} hrs.\n"
-            if not pedidos_hoy:
-                ctx += "- **Pedidos para llevar:** NO disponibles hoy — evento especial con cocina ocupada.\n"
+            # Comparar hora actual con hora de cierre
+            ya_cerrado = False
+            try:
+                h_cierre, m_cierre = [int(x) for x in hora_cierre_hoy.split(":")]
+                ya_cerrado = (ahora.hour, ahora.minute) >= (h_cierre, m_cierre)
+            except Exception:
+                pass
+
+            if ya_cerrado:
+                ctx += f"- **RESTAURANTE CERRADO HOY:** Ya pasaron las {hora_cierre_hoy} hrs -- el restaurante cerro por evento especial.\n"
+                ctx += "- **NO ofrecer reservas ni pedidos para hoy** -- el restaurante ya esta cerrado.\n"
+                ctx += "- Si el cliente quiere reservar, ofrecerle fechas de MANANA en adelante.\n"
             else:
-                ctx += "- **Pedidos para llevar:** disponibles hasta las {hora_cierre_hoy} hrs.\n".format(hora_cierre_hoy=hora_cierre_hoy)
+                ctx += f"- **AVISO HOY:** El restaurante cierra a las {hora_cierre_hoy} hrs por evento especial.\n"
+                ctx += f"- **Horarios disponibles:** solo antes de las {hora_cierre_hoy} hrs.\n"
+                if not pedidos_hoy:
+                    ctx += "- **Pedidos para llevar:** NO disponibles hoy -- evento especial con cocina ocupada.\n"
+                else:
+                    ctx += f"- **Pedidos para llevar:** disponibles hasta las {hora_cierre_hoy} hrs.\n"
 
     if nombre_cliente and es_conocido:
-        ctx += f"- **Cliente:** {nombre_cliente} — ya nos escribio antes, saludalo por nombre.\n"
+        ctx += f"- **Cliente:** {nombre_cliente} -- ya nos escribio antes, saludalo por nombre.\n"
     elif nombre_cliente:
         ctx += f"- **Nombre del cliente:** {nombre_cliente}\n"
 
     return ctx
 
 
-# ── Herramientas (Tools) para Claude ─────────────────────────
+# -- Herramientas (Tools) para Claude
 
 TOOLS = [
     {
@@ -243,7 +255,7 @@ TOOLS = [
 ]
 
 
-# ── Ejecutor de herramientas ──────────────────────────────────
+# -- Ejecutor de herramientas
 
 async def ejecutar_herramienta(nombre: str, args: dict,
                                 session_id: str, wa_id: str,
@@ -299,7 +311,7 @@ async def ejecutar_herramienta(nombre: str, args: dict,
         return json.dumps({"error": str(e)})
 
 
-# ── Funcion principal ─────────────────────────────────────────
+# -- Funcion principal
 
 async def procesar_mensaje(session_id: str, wa_id: str, texto: str,
                             nombre: str, rest_config: dict,
@@ -308,7 +320,6 @@ async def procesar_mensaje(session_id: str, wa_id: str, texto: str,
     Procesa un mensaje de WhatsApp y retorna la respuesta del bot.
     session_id = "PHONE_NUMBER_ID:wa_id"
     """
-    # Obtener config publica (bot_activo, hora_cierre_hoy, pedidos_hoy)
     config_pub = {}
     try:
         config_pub = await api.get_config_publico()
@@ -354,18 +365,14 @@ async def procesar_mensaje(session_id: str, wa_id: str, texto: str,
     else:
         nombre_sesion = sesion.get("nombre", "")
 
-    # Agregar mensaje al historial
     sesion["messages"].append({"role": "user", "content": texto})
 
-    # Limitar historial
     if len(sesion["messages"]) > 20:
         sesion["messages"] = sesion["messages"][-20:]
 
-    # System prompt dinamico
     system_base    = _build_system_prompt(rest_config)
     system_dynamic = system_base + _contexto_dinamico(rest_config, nombre_sesion, es_cliente_conocido, config_pub)
 
-    # Bucle de agente
     max_iteraciones = 5
     for _ in range(max_iteraciones):
         response = await client.messages.create(
@@ -398,7 +405,6 @@ async def procesar_mensaje(session_id: str, wa_id: str, texto: str,
             sesion["messages"].append({"role": "user", "content": tool_results})
             continue
 
-        # Extraer texto de respuesta
         texto_respuesta = ""
         for block in response.content:
             if hasattr(block, "text"):
