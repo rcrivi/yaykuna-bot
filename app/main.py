@@ -1,5 +1,5 @@
 """
-Servidor FastAPI — Bot de reservas multi-restaurante.
+Servidor FastAPI -- Bot de reservas multi-restaurante.
 Maneja:
   - GET  /webhook  -> verificacion de Meta
   - POST /webhook  -> mensajes entrantes de WhatsApp (multi-tenant)
@@ -21,24 +21,6 @@ from .bot import procesar_mensaje, _sesiones as _sesiones_bot
 from .whatsapp import enviar_mensaje, marcar_leido, verificar_firma, extraer_mensaje
 from .api_client import ApiClient
 
-# ── Configuracion multi-restaurante ───────────────────────────
-# Formato RESTAURANTES (variable de entorno JSON):
-# {
-#   "PHONE_NUMBER_ID_1": {
-#     "nombre":     "Restaurante Uno",
-#     "direccion":  "Calle 123, Santiago",
-#     "tel":        "+56 9 XXXX XXXX",
-#     "ig":         "@restaurante_uno",
-#     "wa_local":   "569XXXXXXXXX",        <- wa_id del local para notificaciones
-#     "api_url":    "https://uno.cl/api-reservas",
-#     "api_user":   "admin",
-#     "api_pass":   "Admin2026!",
-#     "bot_secret": "secreto_uno",
-#     "system_prompt": "..."               <- opcional, prompt personalizado
-#   },
-#   "PHONE_NUMBER_ID_2": { ... }
-# }
-
 _RESTAURANTES_JSON = os.getenv("RESTAURANTES", "{}")
 try:
     RESTAURANTES: dict = json.loads(_RESTAURANTES_JSON)
@@ -46,7 +28,6 @@ except json.JSONDecodeError:
     print("[Config] ERROR: Variable RESTAURANTES no es JSON valido. Usando modo single-tenant.")
     RESTAURANTES = {}
 
-# Modo single-tenant (compatibilidad con instalacion original de Yaykuna)
 _SINGLE_PHONE_ID = os.getenv("WHATSAPP_PHONE_ID", "")
 if _SINGLE_PHONE_ID and _SINGLE_PHONE_ID not in RESTAURANTES:
     RESTAURANTES[_SINGLE_PHONE_ID] = {
@@ -61,7 +42,6 @@ if _SINGLE_PHONE_ID and _SINGLE_PHONE_ID not in RESTAURANTES:
         "bot_secret": os.getenv("BOT_SECRET",            ""),
     }
 
-# Crear instancias de ApiClient por restaurante
 _api_clients: dict[str, ApiClient] = {}
 for _pid, _cfg in RESTAURANTES.items():
     _api_clients[_pid] = ApiClient(
@@ -73,15 +53,10 @@ for _pid, _cfg in RESTAURANTES.items():
 
 VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN", "bot_reservas_2026")
 
-# IDs de mensajes procesados (evitar duplicados de Meta)
 _procesados: set[str] = set()
-
-# Cache de config de flujo por restaurante
 _flujo_configs: dict[str, dict] = {}
 _flujo_task: asyncio.Task | None = None
 
-
-# ── Loop de follow-up (verifica sesiones inactivas) ───────────
 
 async def _loop_followup():
     """Revisa cada 60s las sesiones inactivas y envia follow-up si corresponde."""
@@ -97,7 +72,6 @@ async def _loop_followup():
                 if not api:
                     continue
 
-                # Refrescar config de flujo cada 5 min por restaurante
                 ahora = datetime.utcnow()
                 ultima = config_actualizado.get(phone_id)
                 if ultima is None or (ahora - ultima).seconds > 300:
@@ -111,7 +85,6 @@ async def _loop_followup():
                 min_reserva = int(flujo.get("flujo_followup_reserva", 7))
                 min_pedido  = int(flujo.get("flujo_followup_pedido",  3))
 
-                # Solo procesar sesiones de ESTE restaurante
                 prefix = f"{phone_id}:"
                 for session_id, sesion in list(_sesiones_bot.items()):
                     if not session_id.startswith(prefix):
@@ -125,18 +98,34 @@ async def _loop_followup():
                     ultimo = msgs[-1]
                     if ultimo.get("role") != "assistant":
                         continue
+
                     if sesion.get("followup_enviado"):
                         continue
 
                     inactivo_min = (datetime.utcnow() - sesion["updated"]).seconds // 60
 
-                    historial = " ".join(
-                        (m.get("content") or "") if isinstance(m.get("content"), str)
-                        else " ".join(b.get("text", "") for b in (m.get("content") or []) if isinstance(b, dict))
-                        for m in msgs
+                    # No enviar follow-up si el cliente se despidio
+                    DESPEDIDAS = ["saludos","hasta luego","hasta pronto","chao","adios",
+                                  "bye","gracias","ok gracias","no gracias","nada mas",
+                                  "eso era todo","nos vemos","perfect","listo gracias"]
+                    msgs_usuario = [m for m in msgs if m.get("role") == "user"
+                                    and isinstance(m.get("content"), str)]
+                    if msgs_usuario:
+                        ultimo_usr = msgs_usuario[-1]["content"].strip().lower()
+                        if any(d in ultimo_usr for d in DESPEDIDAS):
+                            continue
+
+                    # Detectar intencion transaccional SOLO en mensajes del usuario
+                    historial_usuario = " ".join(
+                        m["content"].lower() for m in msgs
+                        if m.get("role") == "user" and isinstance(m.get("content"), str)
                     )
-                    es_pedido  = any(w in historial.lower() for w in ["pedido","llevar","takeaway","carrito","items","plato"])
-                    es_reserva = any(w in historial.lower() for w in ["reserva","mesa","personas","fecha","hora","sector"])
+                    es_pedido  = any(w in historial_usuario for w in
+                                     ["pedido","llevar","takeaway","carrito","quiero pedir",
+                                      "para llevar","delivery","plato","menu","carta"])
+                    es_reserva = any(w in historial_usuario for w in
+                                     ["reserva","reservar","mesa","personas","fecha","hora",
+                                      "sector","salon","terraza","disponib"])
 
                     if not (es_pedido or es_reserva):
                         continue
@@ -144,7 +133,11 @@ async def _loop_followup():
                     limite = min_pedido if es_pedido else min_reserva
                     if inactivo_min >= limite:
                         tipo = "pedido" if es_pedido else "reserva"
-                        msg_followup = f"Sigues por ahi? Cuando quieras continuamos con tu {tipo}."
+                        msg_followup = (
+                            "Sigues por ahi? Cuando quieras continuamos con tu pedido."
+                            if es_pedido else
+                            "Sigues por ahi? Cuando quieras te ayudo con la reserva."
+                        )
                         try:
                             ok = await enviar_mensaje(wa_id, msg_followup, phone_id=phone_id)
                             if ok:
@@ -160,13 +153,11 @@ async def _loop_followup():
             print(f"[Flujo] Error en loop: {e}")
 
 
-# ── Lifespan ──────────────────────────────────────────────────
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _flujo_task
     restaurantes_activos = list(RESTAURANTES.keys())
-    print(f"[Bot] Iniciando servidor — {len(restaurantes_activos)} restaurante(s): {restaurantes_activos}")
+    print(f"[Bot] Iniciando servidor -- {len(restaurantes_activos)} restaurante(s): {restaurantes_activos}")
     _flujo_task = asyncio.create_task(_loop_followup())
     yield
     if _flujo_task:
@@ -176,20 +167,17 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title       = "Bot Reservas Multi-Restaurante",
-    description = "Agente WhatsApp de reservas — multi-tenant",
+    description = "Agente WhatsApp de reservas -- multi-tenant",
     version     = "2.0.0",
     lifespan    = lifespan,
     docs_url    = None,
     redoc_url   = None,
 )
 
-# Servir panel de administracion
 panel_path = os.path.join(os.path.dirname(__file__), "..", "panel")
 if os.path.isdir(panel_path):
     app.mount("/panel", StaticFiles(directory=panel_path, html=True), name="panel")
 
-
-# ── Health check ──────────────────────────────────────────────
 
 @app.get("/health")
 async def health():
@@ -199,8 +187,6 @@ async def health():
         "restaurantes": len(RESTAURANTES),
     }
 
-
-# ── Verificacion del webhook ───────────────────────────────────
 
 @app.get("/webhook")
 async def verificar_webhook(request: Request):
@@ -216,8 +202,6 @@ async def verificar_webhook(request: Request):
     print(f"[Webhook] Token invalido: {token}")
     raise HTTPException(status_code=403, detail="Token invalido")
 
-
-# ── Envio manual desde el panel PHP ───────────────────────────
 
 @app.post("/send-message")
 async def send_message(request: Request):
@@ -240,8 +224,6 @@ async def send_message(request: Request):
     return {"ok": True}
 
 
-# ── Recepcion de mensajes de Meta ─────────────────────────────
-
 @app.post("/webhook")
 async def recibir_mensaje(request: Request):
     firma   = request.headers.get("X-Hub-Signature-256", "")
@@ -256,9 +238,14 @@ async def recibir_mensaje(request: Request):
     return Response(status_code=200)
 
 
+_INTENTO_TRANSACCIONAL = [
+    "reserva","reservar","mesa","quiero","necesito","disponib","pedido",
+    "pedir","llevar","takeaway","sector","fecha","hora","persona"
+]
+
+
 async def _procesar_en_background(body: dict):
     """Procesa el mensaje identificando el restaurante por phone_number_id."""
-    # Identificar restaurante
     try:
         phone_id = body["entry"][0]["changes"][0]["value"]["metadata"]["phone_number_id"]
     except (KeyError, IndexError):
@@ -278,11 +265,12 @@ async def _procesar_en_background(body: dict):
     wa_id, message_id, texto = resultado
     session_id = f"{phone_id}:{wa_id}"
 
-    # Reset follow-up al recibir nuevo mensaje
+    # Reset follow-up solo si el cliente retoma intencion transaccional
     if session_id in _sesiones_bot:
-        _sesiones_bot[session_id]["followup_enviado"] = False
+        texto_lower = texto.lower()
+        if any(w in texto_lower for w in _INTENTO_TRANSACCIONAL):
+            _sesiones_bot[session_id]["followup_enviado"] = False
 
-    # Evitar duplicados
     if message_id in _procesados:
         return
     _procesados.add(message_id)
@@ -306,7 +294,7 @@ async def _procesar_en_background(body: dict):
         )
 
         if await api.bajo_control_humano(wa_id):
-            print(f"[Bot] {wa_id} bajo control humano — sin respuesta del bot")
+            print(f"[Bot] {wa_id} bajo control humano -- sin respuesta del bot")
             return
 
         respuesta = await procesar_mensaje(
