@@ -131,7 +131,7 @@ class ApiClient:
         try:
             async with httpx.AsyncClient(timeout=5) as client:
                 r = await client.get(
-                    f"{self._url}/bot/control/{wa_id}",
+                    f"{self._url}/wa/conversaciones/{wa_id}/control",
                     headers=self._bot_headers()
                 )
                 return r.json().get("control_humano", False)

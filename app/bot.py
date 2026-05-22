@@ -15,7 +15,6 @@ client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 MODEL  = "claude-haiku-4-5-20251001"
 
 # -- Sesiones en memoria (session_id -> dict)
-# session_id = "PHONE_ID:wa_id"
 _sesiones: dict[str, dict] = {}
 SESSION_TTL_HORAS = 4
 
@@ -40,11 +39,7 @@ def _get_sesion(session_id: str) -> dict:
     return _sesiones[session_id]
 
 
-# -- System Prompt por restaurante
-
 def _build_system_prompt(rest_config: dict) -> str:
-    """Construye el system prompt usando config del restaurante."""
-
     if rest_config.get("system_prompt"):
         return rest_config["system_prompt"]
 
@@ -58,71 +53,70 @@ def _build_system_prompt(rest_config: dict) -> str:
 
     carta_seccion = ""
     if carta_url:
-        carta_seccion = f"""
-## CARTA DIGITAL
-Cuando el cliente pida la carta o el menu, usa la herramienta `enviar_carta` para enviarla como botones interactivos.
-URL de carta: {carta_url}
-"""
+        carta_seccion = (
+            "\n## CARTA DIGITAL\n"
+            "Cuando el cliente pida la carta o el menu, usa la herramienta `enviar_carta`.\n"
+            f"URL de carta: {carta_url}\n"
+        )
 
     menu_seccion = f"\n## CARTA\n{menu_txt}\n" if menu_txt else ""
 
-    return f"""
-Eres el asistente virtual de **{nombre}**, ubicado en {direccion}.
-Tu nombre es **{nombre} Bot**.
+    return (
+        f"Eres el asistente virtual de **{nombre}**, ubicado en {direccion}.\n"
+        f"Tu nombre es **{nombre} Bot**.\n\n"
+        "---\n"
+        "## PERSONALIDAD\n"
+        "- Amable, cercano y eficiente\n"
+        "- Detecta el idioma del cliente (espanol o ingles) y responde en ese idioma\n"
+        "- Nunca inventes informacion -- si no sabes algo, dilo con honestidad\n"
+        "- Usa emojis con moderacion para dar calidez\n\n"
+        "---\n"
+        "## INFORMACION DEL RESTAURANTE\n"
+        f"- **Nombre:** {nombre}\n"
+        f"- **Direccion:** {direccion}\n"
+        f"- **Telefono:** {tel}\n"
+        f"- **Instagram:** {ig}\n"
+        f"- **Horarios:** {horarios}\n\n"
+        "---\n"
+        + menu_seccion
+        + carta_seccion +
+        "---\n"
+        "## TUS CAPACIDADES\n"
+        "1. **Reservar mesa** -- verificar disponibilidad y confirmar al instante\n"
+        "2. **Pedidos para llevar (takeaway / retiro en local)** -- tomar el pedido del cliente\n"
+        "3. **Responder sobre carta y precios**\n"
+        "4. **Buscar reservas existentes** -- por numero de telefono\n"
+        "5. **Cancelar reservas**\n"
+        "6. **Info del restaurante** -- horarios, direccion, etc.\n\n"
+        "---\n"
+        "## PEDIDOS PARA LLEVAR\n"
+        "- El restaurante SI acepta pedidos para llevar (takeaway / retiro en local)\n"
+        "- Cuando el cliente quiera pedir: recolecta los items, nombre y telefono de contacto\n"
+        "- Confirma el pedido y dile que puede retirarlo en el local\n"
+        f"- Si el sistema no puede procesar el pedido, deriva al {tel}\n"
+        "- NUNCA digas que no hacemos pedidos -- SI los hacemos\n\n"
+        "---\n"
+        "## REGLAS DE RESERVA\n"
+        "- Verifica SIEMPRE disponibilidad antes de confirmar\n"
+        "- Datos requeridos: nombre completo, email, telefono, personas, fecha, hora, sector\n"
+        "- Recolecta los datos de forma conversacional\n"
+        "- El sector puede ser: Salon, Terraza, Bar o Privado\n"
+        "- Canal siempre se registra como 'WhatsApp'\n"
+        "- Maximo 20 personas -- mas personas, escalar al admin\n\n"
+        "---\n"
+        "## ESCALADO AL ADMINISTRADOR\n"
+        "Escala cuando:\n"
+        "- El cliente tiene queja grave\n"
+        "- Consulta fuera de tu alcance\n"
+        "- Solicita mas de 20 personas\n\n"
+        "Mensaje: \"Entiendo tu consulta. Voy a comunicarme con nuestro equipo y te responderemos a la brevedad.\"\n\n"
+        "---\n"
+        "## FORMATO DE RESPUESTAS\n"
+        "- Respuestas cortas y directas (maximo 3-4 parrafos)\n"
+        "- Sin Markdown complejo (no tablas, no encabezados #)\n"
+        "- Emojis con moderacion\n"
+    )
 
----
-## PERSONALIDAD
-- Amable, cercano y eficiente
-- Detecta el idioma del cliente (espanol o ingles) y responde en ese idioma
-- Nunca inventes informacion -- si no sabes algo, dilo con honestidad
-- Usa emojis con moderacion para dar calidez
-
----
-## INFORMACION DEL RESTAURANTE
-- **Nombre:** {nombre}
-- **Direccion:** {direccion}
-- **Telefono:** {tel}
-- **Instagram:** {ig}
-- **Horarios:** {horarios}
-
----
-{menu_seccion}
-{carta_seccion}
----
-## TUS CAPACIDADES
-1. **Reservar mesa** -- verificar disponibilidad y confirmar al instante
-2. **Responder sobre carta y precios**
-3. **Buscar reservas existentes** -- por numero de telefono
-4. **Cancelar reservas**
-5. **Info del restaurante** -- horarios, direccion, etc.
-
----
-## REGLAS DE RESERVA
-- Verifica SIEMPRE disponibilidad antes de confirmar
-- Datos requeridos: nombre completo, email, telefono, personas, fecha, hora, sector
-- Recolecta los datos de forma conversacional
-- El sector puede ser: Salon, Terraza, Bar o Privado
-- Canal siempre se registra como 'WhatsApp'
-- Maximo 20 personas -- mas personas, escalar al admin
-
----
-## ESCALADO AL ADMINISTRADOR
-Escala cuando:
-- El cliente tiene queja grave
-- Consulta fuera de tu alcance
-- Solicita mas de 20 personas
-
-Mensaje: "Entiendo tu consulta. Voy a comunicarme con nuestro equipo y te responderemos a la brevedad. Gracias por tu paciencia."
-
----
-## FORMATO DE RESPUESTAS
-- Respuestas cortas y directas (maximo 3-4 parrafos)
-- Sin Markdown complejo (no tablas, no encabezados #)
-- Emojis con moderacion
-"""
-
-
-# -- Contexto dinamico (hora actual)
 
 def _contexto_dinamico(rest_config: dict, nombre_cliente: str = "",
                         es_conocido: bool = False,
@@ -137,18 +131,17 @@ def _contexto_dinamico(rest_config: dict, nombre_cliente: str = "",
     dias  = ["Lunes","Martes","Miercoles","Jueves","Viernes","Sabado","Domingo"]
     dia   = dias[ahora.weekday()]
 
-    ctx = f"""
----
-## CONTEXTO ACTUAL
-- **Fecha:** {dia} {ahora.strftime('%d/%m/%Y')}
-- **Hora local:** {ahora.strftime('%H:%M')} hrs
-"""
-    # Estado especial de hoy (cierre anticipado / pedidos)
+    ctx = (
+        "\n---\n"
+        "## CONTEXTO ACTUAL\n"
+        f"- **Fecha:** {dia} {ahora.strftime('%d/%m/%Y')}\n"
+        f"- **Hora local:** {ahora.strftime('%H:%M')} hrs\n"
+    )
+
     if config_pub:
         hora_cierre_hoy = config_pub.get("hora_cierre_hoy")
         pedidos_hoy     = config_pub.get("pedidos_hoy", True)
         if hora_cierre_hoy:
-            # Comparar hora actual con hora de cierre
             ya_cerrado = False
             try:
                 h_cierre, m_cierre = [int(x) for x in hora_cierre_hoy.split(":")]
@@ -157,16 +150,15 @@ def _contexto_dinamico(rest_config: dict, nombre_cliente: str = "",
                 pass
 
             if ya_cerrado:
-                ctx += f"- **RESTAURANTE CERRADO HOY:** Ya pasaron las {hora_cierre_hoy} hrs -- el restaurante cerro por evento especial.\n"
-                ctx += "- **NO ofrecer reservas ni pedidos para hoy** -- el restaurante ya esta cerrado.\n"
-                ctx += "- Si el cliente quiere reservar, ofrecerle fechas de MANANA en adelante.\n"
+                ctx += f"- **AVISO HOY:** El restaurante cerro a las {hora_cierre_hoy} hrs por evento especial.\n"
+                ctx += "- No ofrecer reservas ni pedidos para HOY MISMO -- ya cerramos.\n"
+                ctx += "- Para reservas futuras (desde manana) si puedo ayudar normalmente.\n"
+                ctx += "- Para pedidos futuros derivar al telefono del restaurante.\n"
             else:
                 ctx += f"- **AVISO HOY:** El restaurante cierra a las {hora_cierre_hoy} hrs por evento especial.\n"
-                ctx += f"- **Horarios disponibles:** solo antes de las {hora_cierre_hoy} hrs.\n"
+                ctx += f"- Reservas y pedidos disponibles solo hasta las {hora_cierre_hoy} hrs hoy.\n"
                 if not pedidos_hoy:
-                    ctx += "- **Pedidos para llevar:** NO disponibles hoy -- evento especial con cocina ocupada.\n"
-                else:
-                    ctx += f"- **Pedidos para llevar:** disponibles hasta las {hora_cierre_hoy} hrs.\n"
+                    ctx += "- Pedidos para llevar NO disponibles hoy -- evento especial con cocina ocupada.\n"
 
     if nombre_cliente and es_conocido:
         ctx += f"- **Cliente:** {nombre_cliente} -- ya nos escribio antes, saludalo por nombre.\n"
@@ -175,8 +167,6 @@ def _contexto_dinamico(rest_config: dict, nombre_cliente: str = "",
 
     return ctx
 
-
-# -- Herramientas (Tools) para Claude
 
 TOOLS = [
     {
@@ -255,8 +245,6 @@ TOOLS = [
 ]
 
 
-# -- Ejecutor de herramientas
-
 async def ejecutar_herramienta(nombre: str, args: dict,
                                 session_id: str, wa_id: str,
                                 rest_config: dict, api: ApiClient) -> str:
@@ -311,15 +299,9 @@ async def ejecutar_herramienta(nombre: str, args: dict,
         return json.dumps({"error": str(e)})
 
 
-# -- Funcion principal
-
 async def procesar_mensaje(session_id: str, wa_id: str, texto: str,
                             nombre: str, rest_config: dict,
                             api: ApiClient) -> str:
-    """
-    Procesa un mensaje de WhatsApp y retorna la respuesta del bot.
-    session_id = "PHONE_NUMBER_ID:wa_id"
-    """
     config_pub = {}
     try:
         config_pub = await api.get_config_publico()
@@ -337,7 +319,6 @@ async def procesar_mensaje(session_id: str, wa_id: str, texto: str,
     sesion = _get_sesion(session_id)
     sesion["updated"] = datetime.utcnow()
 
-    # Modo presencial
     try:
         flujo = await api.get_flujo_config()
         clave_presencial = flujo.get("palabra_clave_presencial", "*mesa*").strip()
@@ -355,7 +336,6 @@ async def procesar_mensaje(session_id: str, wa_id: str, texto: str,
         sesion["messages"].append({"role": "assistant", "content": respuesta})
         return respuesta
 
-    # Reconocimiento del cliente
     es_cliente_conocido = False
     if nombre and nombre != wa_id:
         if not sesion.get("nombre"):
