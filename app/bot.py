@@ -61,8 +61,12 @@ def _build_system_prompt(rest_config: dict) -> str:
 
     menu_seccion = (
         "\n## CARTA\n"
-        "IMPORTANTE: Los platos pueden venir escritos en mayusculas, minusculas o mixto — "
-        "tratalos siempre como equivalentes. Busca el plato en la lista sin importar como lo escribio el cliente.\n"
+        "REGLAS CRITICAS PARA BUSCAR EN LA CARTA:\n"
+        "1. Los platos pueden estar escritos en mayusculas, minusculas o mixto — son equivalentes.\n"
+        "2. El cliente puede escribir solo parte del nombre (ej: 'chaufa' o 'fetuccini huancaina') — busca coincidencias parciales en TODAS las secciones.\n"
+        "3. NUNCA digas que un plato no existe sin antes haber revisado TODAS las secciones de la carta.\n"
+        "4. Si el cliente escribe una palabra clave, lista TODOS los platos que la contengan.\n"
+        "5. Si no encuentras el plato exacto, sugiere los mas parecidos que SI esten en la carta.\n\n"
         f"{menu_txt}\n"
     ) if menu_txt else ""
 
@@ -143,7 +147,9 @@ def _build_system_prompt(rest_config: dict) -> str:
         "- Respuestas cortas y directas (maximo 3-4 parrafos)\n"
         "- Sin Markdown complejo (no tablas, no encabezados #)\n"
         "- Emojis con moderacion\n"
-        "- NUNCA pongas asteriscos (*) alrededor de una URL. Las URLs van siempre como texto plano, sin negritas ni formato. Ejemplo correcto: https://yaykuna.cl/carta.html — Ejemplo INCORRECTO: **https://yaykuna.cl/carta.html**\n"
+        "- NUNCA uses asteriscos (*) en tus respuestas. Ni para negritas, ni para listas, ni para URLs. Texto plano siempre.\n"
+        "- Ejemplo INCORRECTO: *Chaufa de Pollo* o **$14.500**\n"
+        "- Ejemplo CORRECTO: Chaufa de Pollo $14.500\n"
     )
 
 
