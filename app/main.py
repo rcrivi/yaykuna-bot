@@ -289,7 +289,7 @@ async def _procesar_en_background(body: dict):
     try:
         await marcar_leido(message_id, phone_id=phone_id)
 
-        texto_log = texto if msg_tipo == "text" else f"[imagen] {texto}".strip()
+        texto_log = texto if msg_tipo == "text" else (f"[imagen] {texto}".strip() if texto and texto != "[imagen]" else "[imagen: comprobante]")
         await api.registrar_mensaje(
             wa_id, nombre, "entrante", texto_log,
             origen="bot", meta_message_id=message_id
