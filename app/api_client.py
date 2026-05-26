@@ -133,22 +133,33 @@ class ApiClient:
             pass
 
     async def buscar_pedido_pendiente(self, wa_id: str) -> dict:
-        """Retorna el pedido pendiente mas reciente del cliente (por wa_id)."""
+        """Retorna contexto completo del pedido mas reciente del cliente para manejo de comprobantes."""
         try:
             result = await self.ver_mis_pedidos(wa_id)
             pedidos = result.get("pedidos", [])
-            pendientes = [
-                p for p in pedidos
-                if p.get("estado") in ("pending", "pendiente", "new")
-                and not p.get("transferencia_ok")
-            ]
-            if pendientes:
-                # Ordenar por id descendente (mas reciente primero)
-                pendientes.sort(key=lambda p: int(p.get("id", 0)), reverse=True)
-                return {"pedido": pendientes[0], "encontrado": True}
-            return {"pedido": None, "encontrado": False}
+            if not pedidos:
+                return {"situacion": "sin_pedidos", "pedido": None}
+
+            # Ordenar por id descendente (mas reciente primero)
+            pedidos.sort(key=lambda p: int(p.get("id", 0)), reverse=True)
+            reciente = pedidos[0]
+
+            ya_pagado  = bool(reciente.get("transferencia_ok"))
+            estado     = reciente.get("estado", "")
+            cancelado  = estado in ("cancelled", "cancelado", "canceled")
+
+            if cancelado:
+                return {"situacion": "cancelado",  "pedido": reciente}
+            if ya_pagado:
+                return {"situacion": "ya_pagado",  "pedido": reciente}
+            if estado in ("pending", "pendiente", "new", ""):
+                return {"situacion": "pendiente",  "pedido": reciente}
+
+            # Otro estado (confirmed, listo, en_preparacion, etc.)
+            return {"situacion": "otro_estado", "pedido": reciente}
+
         except Exception as e:
-            return {"error": str(e), "encontrado": False}
+            return {"situacion": "error", "pedido": None, "error": str(e)}
 
     async def bajo_control_humano(self, wa_id: str) -> bool:
         try:
@@ -212,14 +223,20 @@ class ApiClient:
 
     async def ver_mis_pedidos(self, wa_id: str) -> dict:
         try:
-            async with httpx.AsyncClient(timeout=5) as client:
+            async with httpx.AsyncClient(timeout=12) as client:
                 r = await client.get(
                     f"{self._url}/pedidos/buscar",
                     params={"wa_id": wa_id},
                     headers=self._bot_headers()
                 )
-                return r.json()
-        except Exception:
+                if r.status_code != 200:
+                    print(f"[ApiClient] ver_mis_pedidos HTTP {r.status_code}: {r.text[:200]}")
+                    return {"pedidos": []}
+                data = r.json()
+                print(f"[ApiClient] ver_mis_pedidos wa_id={wa_id} → {len(data.get('pedidos', []))} pedidos")
+                return data
+        except Exception as e:
+            print(f"[ApiClient] ver_mis_pedidos error: {e}")
             return {"pedidos": []}
 
     async def marcar_pedido_notificado(self, pedido_id: int) -> None:
