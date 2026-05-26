@@ -135,13 +135,14 @@ def _build_system_prompt(rest_config: dict) -> str:
         "- Si el cliente te envia una imagen, analízala visualmente.\n"
         "- Si es un comprobante de transferencia bancaria:\n"
         "  1. Extrae el monto transferido y verifica el destinatario.\n"
-        "  2. Si el destinatario y el monto son correctos: llama a marcar_transferencia_ok\n"
-        "     con el pedido_id del pedido mas reciente (lo tienes en el historial de esta conversacion)\n"
-        "     y el monto_verificado que aparece en el comprobante.\n"
-        "  3. Confirma al cliente: 'Comprobante recibido ✅ Tu pedido #{id} esta registrado. Te avisamos cuando este listo!'\n"
-        "  4. Si el monto no coincide o el destinatario es incorrecto: explicale que no coincide y pidele reenviar.\n"
-        "- Si la imagen NO es un comprobante de transferencia, responde normalmente.\n"
-        "- Si no hay un pedido reciente en la conversacion, pregunta al cliente el numero de pedido.\n\n"
+        "  2. Determina el pedido_id: busca en el historial de esta conversacion si ya se menciono un numero de pedido.\n"
+        "     Si NO hay pedido_id en el historial, llama a buscar_pedido_pendiente para obtenerlo automaticamente.\n"
+        "  3. Si encontraste el pedido y el monto/destinatario son correctos: llama a marcar_transferencia_ok\n"
+        "     con ese pedido_id y el monto_verificado que aparece en el comprobante.\n"
+        "  4. Confirma al cliente: 'Comprobante recibido ✅ Tu pedido #{id} esta registrado. Te avisamos cuando este listo!'\n"
+        "  5. Si el monto no coincide o el destinatario es incorrecto: explicale que no coincide y pidele reenviar.\n"
+        "  6. Si buscar_pedido_pendiente no encontro ningun pedido pendiente, pregunta al cliente el numero de pedido.\n"
+        "- Si la imagen NO es un comprobante de transferencia, responde normalmente.\n\n"
         "---\n"
         "## FORMATO DE RESPUESTAS\n"
         "- Respuestas cortas y directas (maximo 3-4 parrafos)\n"
@@ -305,6 +306,15 @@ TOOLS = [
         }
     },
     {
+        "name": "buscar_pedido_pendiente",
+        "description": "Busca el pedido pendiente mas reciente del cliente actual (el que esta en la conversacion). Usar cuando llega un comprobante de transferencia pero no hay pedido_id en el historial de la conversacion.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
+    },
+    {
         "name": "escalar_al_admin",
         "description": "Notifica al equipo del restaurante sobre una consulta que el bot no puede resolver.",
         "input_schema": {
@@ -408,6 +418,10 @@ async def ejecutar_herramienta(nombre: str, args: dict,
             if not pedido_id:
                 return json.dumps({"error": "pedido_id requerido"})
             data = await api.marcar_transferencia_ok(pedido_id, monto)
+            return json.dumps(data, ensure_ascii=False)
+
+        elif nombre == "buscar_pedido_pendiente":
+            data = await api.buscar_pedido_pendiente(wa_id)
             return json.dumps(data, ensure_ascii=False)
 
         else:

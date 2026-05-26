@@ -290,16 +290,8 @@ async def _procesar_en_background(body: dict):
         await marcar_leido(message_id, phone_id=phone_id)
 
         texto_log = texto if msg_tipo == "text" else (f"[imagen] {texto}".strip() if texto and texto != "[imagen]" else "[imagen: comprobante]")
-        await api.registrar_mensaje(
-            wa_id, nombre, "entrante", texto_log,
-            origen="bot", meta_message_id=message_id
-        )
 
-        if await api.bajo_control_humano(wa_id):
-            print(f"[Bot] {wa_id} bajo control humano -- sin respuesta del bot")
-            return
-
-        # Descargar imagen si el mensaje es de tipo image
+        # Descargar imagen ANTES de registrar, para adjuntarla al mensaje en la BD
         imagen_b64  = None
         imagen_mime = "image/jpeg"
         if msg_tipo == "image" and media_id:
@@ -311,6 +303,16 @@ async def _procesar_en_background(body: dict):
                 print(f"[Bot] Imagen descargada para {wa_id}: {len(img_bytes)} bytes ({imagen_mime})")
             else:
                 print(f"[Bot] No se pudo descargar imagen de {wa_id}")
+
+        await api.registrar_mensaje(
+            wa_id, nombre, "entrante", texto_log,
+            origen="bot", meta_message_id=message_id,
+            imagen_b64=imagen_b64, imagen_mime=imagen_mime
+        )
+
+        if await api.bajo_control_humano(wa_id):
+            print(f"[Bot] {wa_id} bajo control humano -- sin respuesta del bot")
+            return
 
         respuesta = await procesar_mensaje(
             session_id  = session_id,

@@ -107,7 +107,9 @@ class ApiClient:
 
     async def registrar_mensaje(self, wa_id: str, nombre: str, direccion: str,
                                  mensaje: str, origen: str = "bot",
-                                 meta_message_id: str = None) -> None:
+                                 meta_message_id: str = None,
+                                 imagen_b64: str = None,
+                                 imagen_mime: str = "image/jpeg") -> None:
         data = {
             "wa_id":     wa_id,
             "nombre":    nombre,
@@ -117,8 +119,11 @@ class ApiClient:
         }
         if meta_message_id:
             data["meta_message_id"] = meta_message_id
+        if imagen_b64:
+            data["imagen_b64"]  = imagen_b64
+            data["imagen_mime"] = imagen_mime
         try:
-            async with httpx.AsyncClient(timeout=5) as client:
+            async with httpx.AsyncClient(timeout=10) as client:
                 await client.post(
                     f"{self._url}/wa/mensajes/registrar",
                     json=data,
@@ -126,6 +131,24 @@ class ApiClient:
                 )
         except Exception:
             pass
+
+    async def buscar_pedido_pendiente(self, wa_id: str) -> dict:
+        """Retorna el pedido pendiente mas reciente del cliente (por wa_id)."""
+        try:
+            result = await self.ver_mis_pedidos(wa_id)
+            pedidos = result.get("pedidos", [])
+            pendientes = [
+                p for p in pedidos
+                if p.get("estado") in ("pending", "pendiente", "new")
+                and not p.get("transferencia_ok")
+            ]
+            if pendientes:
+                # Ordenar por id descendente (mas reciente primero)
+                pendientes.sort(key=lambda p: int(p.get("id", 0)), reverse=True)
+                return {"pedido": pendientes[0], "encontrado": True}
+            return {"pedido": None, "encontrado": False}
+        except Exception as e:
+            return {"error": str(e), "encontrado": False}
 
     async def bajo_control_humano(self, wa_id: str) -> bool:
         try:
