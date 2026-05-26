@@ -18,7 +18,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from .bot import procesar_mensaje, _sesiones as _sesiones_bot
-from .whatsapp import enviar_mensaje, marcar_leido, verificar_firma, extraer_mensaje
+from .whatsapp import enviar_mensaje, marcar_leido, verificar_firma, extraer_mensaje, descargar_media
 from .api_client import ApiClient
 
 _RESTAURANTES_JSON = os.getenv("RESTAURANTES", "{}")
@@ -262,7 +262,7 @@ async def _procesar_en_background(body: dict):
     if not resultado:
         return
 
-    wa_id, message_id, texto = resultado
+    wa_id, message_id, texto, msg_tipo, media_id, media_mime = resultado
     session_id = f"{phone_id}:{wa_id}"
 
     # Reset follow-up solo si el cliente retoma intencion transaccional
@@ -278,7 +278,8 @@ async def _procesar_en_background(body: dict):
         _procesados.clear()
 
     restaurante_nombre = rest_config.get("nombre", "Restaurante")
-    print(f"[Bot] [{restaurante_nombre}] {wa_id}: {texto[:80]}")
+    tipo_log = "imagen" if msg_tipo == "image" else "texto"
+    print(f"[Bot] [{restaurante_nombre}] {wa_id} [{tipo_log}]: {texto[:80]}")
 
     try:
         nombre = body["entry"][0]["changes"][0]["value"]["contacts"][0]["profile"]["name"]
@@ -288,14 +289,28 @@ async def _procesar_en_background(body: dict):
     try:
         await marcar_leido(message_id, phone_id=phone_id)
 
+        texto_log = texto if msg_tipo == "text" else f"[imagen] {texto}".strip()
         await api.registrar_mensaje(
-            wa_id, nombre, "entrante", texto,
+            wa_id, nombre, "entrante", texto_log,
             origen="bot", meta_message_id=message_id
         )
 
         if await api.bajo_control_humano(wa_id):
             print(f"[Bot] {wa_id} bajo control humano -- sin respuesta del bot")
             return
+
+        # Descargar imagen si el mensaje es de tipo image
+        imagen_b64  = None
+        imagen_mime = "image/jpeg"
+        if msg_tipo == "image" and media_id:
+            import base64
+            img_bytes, img_mime = await descargar_media(media_id)
+            if img_bytes:
+                imagen_b64  = base64.b64encode(img_bytes).decode()
+                imagen_mime = img_mime or "image/jpeg"
+                print(f"[Bot] Imagen descargada para {wa_id}: {len(img_bytes)} bytes ({imagen_mime})")
+            else:
+                print(f"[Bot] No se pudo descargar imagen de {wa_id}")
 
         respuesta = await procesar_mensaje(
             session_id  = session_id,
@@ -304,6 +319,8 @@ async def _procesar_en_background(body: dict):
             nombre      = nombre,
             rest_config = rest_config,
             api         = api,
+            imagen_b64  = imagen_b64,
+            imagen_mime = imagen_mime,
         )
 
         ok = await enviar_mensaje(wa_id, respuesta, phone_id=phone_id)

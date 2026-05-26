@@ -59,7 +59,12 @@ def _build_system_prompt(rest_config: dict) -> str:
             f"URL de carta: {carta_url}\n"
         )
 
-    menu_seccion = f"\n## CARTA\n{menu_txt}\n" if menu_txt else ""
+    menu_seccion = (
+        "\n## CARTA\n"
+        "IMPORTANTE: Los platos pueden venir escritos en mayusculas, minusculas o mixto — "
+        "tratalos siempre como equivalentes. Busca el plato en la lista sin importar como lo escribio el cliente.\n"
+        f"{menu_txt}\n"
+    ) if menu_txt else ""
 
     return (
         f"Eres el asistente virtual de **{nombre}**, ubicado en {direccion}.\n"
@@ -122,6 +127,17 @@ def _build_system_prompt(rest_config: dict) -> str:
         "- Entrega los datos_transferencia que vienen en el resultado del pedido.\n"
         "- Indica que el pedido quedara pendiente hasta confirmar el pago.\n"
         "- El cliente puede tambien pagar en caja al retirar (si el local lo permite).\n\n"
+        "## COMPROBANTES DE TRANSFERENCIA\n"
+        "- Si el cliente te envia una imagen, analízala visualmente.\n"
+        "- Si es un comprobante de transferencia bancaria:\n"
+        "  1. Extrae el monto transferido y verifica el destinatario.\n"
+        "  2. Si el destinatario y el monto son correctos: llama a marcar_transferencia_ok\n"
+        "     con el pedido_id del pedido mas reciente (lo tienes en el historial de esta conversacion)\n"
+        "     y el monto_verificado que aparece en el comprobante.\n"
+        "  3. Confirma al cliente: 'Comprobante recibido ✅ Tu pedido #{id} esta registrado. Te avisamos cuando este listo!'\n"
+        "  4. Si el monto no coincide o el destinatario es incorrecto: explicale que no coincide y pidele reenviar.\n"
+        "- Si la imagen NO es un comprobante de transferencia, responde normalmente.\n"
+        "- Si no hay un pedido reciente en la conversacion, pregunta al cliente el numero de pedido.\n\n"
         "---\n"
         "## FORMATO DE RESPUESTAS\n"
         "- Respuestas cortas y directas (maximo 3-4 parrafos)\n"
@@ -271,6 +287,18 @@ TOOLS = [
         }
     },
     {
+        "name": "marcar_transferencia_ok",
+        "description": "Registra que el comprobante de transferencia de un pedido fue verificado visualmente. Llamar SOLO cuando hayas analizado la imagen y el comprobante sea válido (monto y destinatario correctos).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "pedido_id":       {"type": "integer", "description": "ID del pedido al que corresponde el comprobante"},
+                "monto_verificado": {"type": "integer", "description": "Monto en pesos (CLP) que aparece en el comprobante"}
+            },
+            "required": ["pedido_id", "monto_verificado"]
+        }
+    },
+    {
         "name": "escalar_al_admin",
         "description": "Notifica al equipo del restaurante sobre una consulta que el bot no puede resolver.",
         "input_schema": {
@@ -368,6 +396,14 @@ async def ejecutar_herramienta(nombre: str, args: dict,
 
             return json.dumps(data, ensure_ascii=False)
 
+        elif nombre == "marcar_transferencia_ok":
+            pedido_id = int(args.get("pedido_id", 0))
+            monto     = int(args.get("monto_verificado", 0))
+            if not pedido_id:
+                return json.dumps({"error": "pedido_id requerido"})
+            data = await api.marcar_transferencia_ok(pedido_id, monto)
+            return json.dumps(data, ensure_ascii=False)
+
         else:
             return json.dumps({"error": f"Herramienta '{nombre}' no reconocida"})
 
@@ -377,7 +413,9 @@ async def ejecutar_herramienta(nombre: str, args: dict,
 
 async def procesar_mensaje(session_id: str, wa_id: str, texto: str,
                             nombre: str, rest_config: dict,
-                            api: ApiClient) -> str:
+                            api: ApiClient,
+                            imagen_b64: str = None,
+                            imagen_mime: str = "image/jpeg") -> str:
     config_pub = {}
     try:
         config_pub = await api.get_config_publico()
@@ -422,7 +460,27 @@ async def procesar_mensaje(session_id: str, wa_id: str, texto: str,
     else:
         nombre_sesion = sesion.get("nombre", "")
 
-    sesion["messages"].append({"role": "user", "content": texto})
+    # Construir contenido del mensaje (texto simple o imagen + texto)
+    if imagen_b64:
+        user_content = [
+            {
+                "type": "image",
+                "source": {
+                    "type":       "base64",
+                    "media_type": imagen_mime,
+                    "data":       imagen_b64,
+                }
+            },
+            {
+                "type": "text",
+                "text": texto if texto and texto != "[imagen]"
+                        else "El cliente acaba de enviar esta imagen (posible comprobante de transferencia). Analízala y actúa según las instrucciones de COMPROBANTES DE TRANSFERENCIA."
+            }
+        ]
+    else:
+        user_content = texto
+
+    sesion["messages"].append({"role": "user", "content": user_content})
 
     if len(sesion["messages"]) > 20:
         sesion["messages"] = sesion["messages"][-20:]

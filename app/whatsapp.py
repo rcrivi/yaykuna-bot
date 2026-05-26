@@ -140,21 +140,73 @@ def verificar_firma(payload_bytes: bytes, firma_header: str) -> bool:
     return hmac.compare_digest(firma_header[7:], firma_esperada)
 
 
-def extraer_mensaje(body: dict):
-    """Extrae (wa_id, message_id, texto) del payload del webhook de Meta."""
+async def descargar_media(media_id: str) -> tuple[bytes, str] | tuple[None, None]:
+    """Descarga un archivo media de Meta WhatsApp API.
+    Retorna (bytes, mime_type) o (None, None) si falla.
+    """
+    if not TOKEN:
+        return None, None
+    headers = {"Authorization": f"Bearer {TOKEN}"}
     try:
-        entry   = body["entry"][0]
-        changes = entry["changes"][0]
-        value   = changes["value"]
+        async with httpx.AsyncClient(timeout=30) as client:
+            # Paso 1: obtener la URL de descarga
+            r = await client.get(
+                f"https://graph.facebook.com/v20.0/{media_id}",
+                headers=headers
+            )
+            if r.status_code != 200:
+                print(f"[WhatsApp] Error obteniendo URL de media {media_id}: {r.status_code}")
+                return None, None
+            data     = r.json()
+            url      = data.get("url")
+            mime     = data.get("mime_type", "image/jpeg")
+            if not url:
+                return None, None
+            # Paso 2: descargar la imagen
+            r2 = await client.get(url, headers=headers)
+            if r2.status_code != 200:
+                print(f"[WhatsApp] Error descargando media: {r2.status_code}")
+                return None, None
+            return r2.content, mime
+    except Exception as e:
+        print(f"[WhatsApp] Excepcion descargando media {media_id}: {e}")
+        return None, None
+
+
+def extraer_mensaje(body: dict):
+    """Extrae (wa_id, message_id, texto, tipo, media_id, mime_type) del webhook de Meta.
+    - tipo: 'text' o 'image'
+    - media_id: ID del archivo en Meta (solo para imágenes)
+    - mime_type: tipo MIME de la imagen (solo para imágenes)
+    Retorna None si el mensaje no es procesable.
+    """
+    try:
+        entry    = body["entry"][0]
+        changes  = entry["changes"][0]
+        value    = changes["value"]
         messages = value.get("messages", [])
         if not messages:
             return None
-        msg = messages[0]
-        if msg.get("type") != "text":
-            return None
+        msg      = messages[0]
         wa_id      = msg["from"]
         message_id = msg["id"]
-        texto      = msg["text"]["body"].strip()
-        return wa_id, message_id, texto
+        msg_type   = msg.get("type", "text")
+
+        if msg_type == "text":
+            texto = msg["text"]["body"].strip()
+            return wa_id, message_id, texto, "text", None, None
+
+        elif msg_type == "image":
+            img      = msg.get("image", {})
+            media_id = img.get("id")
+            mime     = img.get("mime_type", "image/jpeg")
+            caption  = img.get("caption", "").strip()
+            texto    = caption or "[imagen]"
+            return wa_id, message_id, texto, "image", media_id, mime
+
+        else:
+            # Tipo no soportado (audio, video, documento, sticker, etc.)
+            return None
+
     except (KeyError, IndexError):
         return None
