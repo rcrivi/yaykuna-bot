@@ -133,19 +133,23 @@ def _build_system_prompt(rest_config: dict) -> str:
         "- El cliente puede tambien pagar en caja al retirar (si el local lo permite).\n\n"
         "## COMPROBANTES DE TRANSFERENCIA\n"
         "- Si el cliente te envia una imagen, analízala visualmente.\n"
-        "- Si es un comprobante de transferencia bancaria valido:\n"
-        "  PASO 1 — Extrae: monto transferido, destinatario y estado del comprobante.\n"
-        "  PASO 2 — Obtener pedido_id (OBLIGATORIO, NUNCA saltar este paso):\n"
-        "    a) Revisa el historial: ¿se menciono un numero de pedido (#NN) en esta conversacion?\n"
-        "       SI -> usa ese numero como pedido_id.\n"
-        "       NO -> llama INMEDIATAMENTE a buscar_pedido_pendiente. No preguntes al cliente. Siempre llama primero.\n"
-        "  PASO 3 — Si el monto y el destinatario son correctos:\n"
-        "    Llama a marcar_transferencia_ok con el pedido_id y monto_verificado.\n"
-        "    Responde: 'Comprobante recibido ✅ Tu pedido #XX quedo registrado. Te avisamos cuando este listo!'\n"
-        "  PASO 4 — Si buscar_pedido_pendiente retorno encontrado=false:\n"
-        "    Solo entonces pregunta: '¿Cual es el numero de tu pedido?'\n"
-        "  PASO 5 — Si el monto o destinatario no coincide: explicale y pidele reenviar el comprobante correcto.\n"
-        "- REGLA CRITICA: NUNCA le pidas el numero de pedido al cliente si aun no llamaste a buscar_pedido_pendiente.\n"
+        "- Si es un comprobante de transferencia bancaria:\n"
+        "  PASO 1 — Extrae del comprobante: monto_comprobante, destinatario y estado.\n"
+        "  PASO 2 — El contexto [SISTEMA] ya incluye el pedido automaticamente con su total.\n"
+        "    Usa el pedido_id y total que vienen en [SISTEMA]. No preguntes al cliente.\n"
+        "  PASO 3 — Verifica el monto: compara monto_comprobante con total del pedido en [SISTEMA].\n"
+        "    SI monto_comprobante >= total del pedido Y destinatario es correcto:\n"
+        "      Llama a marcar_transferencia_ok con pedido_id y monto_verificado=monto_comprobante.\n"
+        "      Responde: 'Comprobante recibido ✅ Verificamos $XX.XXX. Tu pedido #NN quedo registrado. Te avisamos cuando este listo!'\n"
+        "    SI monto_comprobante < total del pedido:\n"
+        "      Responde: 'El monto del comprobante ($XX.XXX) no coincide con el total de tu pedido ($YY.YYY). "
+        "Por favor verifica y reenvía el comprobante correcto.'\n"
+        "      NO llames marcar_transferencia_ok.\n"
+        "    SI el destinatario no corresponde al restaurante:\n"
+        "      Responde: 'El comprobante parece ser de una transferencia a otro destinatario. "
+        "Por favor reenvía el comprobante correcto a nombre de [nombre del restaurante].'\n"
+        "      NO llames marcar_transferencia_ok.\n"
+        "  PASO 4 — Si [SISTEMA] indica que no hay pedido o pide el numero: pregunta '¿Cual es el numero de tu pedido?'\n"
         "- Si la imagen NO es un comprobante de transferencia, responde normalmente.\n\n"
         "---\n"
         "## FORMATO DE RESPUESTAS\n"
@@ -486,6 +490,64 @@ async def procesar_mensaje(session_id: str, wa_id: str, texto: str,
 
     # Construir contenido del mensaje (texto simple o imagen + texto)
     if imagen_b64:
+        # Pre-buscar el pedido del cliente para inyectarlo como contexto.
+        # El bot ya tiene el dato y no necesita decidir si llamar un tool.
+        pedido_ctx_txt = ""
+        try:
+            pedido_ctx  = await api.buscar_pedido_pendiente(wa_id)
+            situacion   = pedido_ctx.get("situacion", "error")
+            p           = pedido_ctx.get("pedido")
+
+            if situacion == "pendiente" and p:
+                total = p.get('total', '?')
+                pedido_ctx_txt = (
+                    f"\n[SISTEMA — pedido encontrado automaticamente: "
+                    f"pedido_id={p['id']}, TOTAL_PEDIDO=${total}, estado=pendiente_de_pago. "
+                    f"INSTRUCCION: compara el monto del comprobante con TOTAL_PEDIDO=${total}. "
+                    f"Si el monto coincide o es mayor Y el destinatario es correcto, "
+                    f"llama marcar_transferencia_ok con pedido_id={p['id']} SIN preguntar nada al cliente. "
+                    f"Si el monto es menor, informa la diferencia al cliente.]"
+                )
+            elif situacion == "ya_pagado" and p:
+                pedido_ctx_txt = (
+                    f"\n[SISTEMA — ATENCION: el pedido #{p['id']} ya tiene el pago registrado "
+                    f"(transferencia_ok=1, monto=${p.get('transferencia_monto', p.get('total','?'))}). "
+                    f"NO llames marcar_transferencia_ok. "
+                    f"Informa al cliente que su comprobante ya fue recibido anteriormente y el pedido esta confirmado.]"
+                )
+            elif situacion == "cancelado" and p:
+                pedido_ctx_txt = (
+                    f"\n[SISTEMA — el pedido mas reciente #{p['id']} esta CANCELADO. "
+                    f"Informa al cliente que ese pedido fue cancelado y que si quiere hacer un nuevo pedido con gusto lo ayudas. "
+                    f"NO registres el comprobante.]"
+                )
+            elif situacion == "otro_estado" and p:
+                pedido_ctx_txt = (
+                    f"\n[SISTEMA — el pedido #{p['id']} esta en estado '{p.get('estado','')}' "
+                    f"(ya procesado, no requiere pago por transferencia). "
+                    f"Informa al cliente el estado actual y que si tiene dudas puede consultar al equipo.]"
+                )
+            elif situacion == "sin_pedidos":
+                pedido_ctx_txt = (
+                    "\n[SISTEMA — este cliente no tiene pedidos registrados. "
+                    "Si el comprobante parece valido, pregunta al cliente el numero de pedido (#NN).]"
+                )
+            else:
+                pedido_ctx_txt = (
+                    "\n[SISTEMA — no se pudo obtener informacion del pedido. "
+                    "Si el comprobante es valido, pregunta al cliente el numero de pedido.]"
+                )
+        except Exception:
+            pass
+
+        texto_base = texto if texto and texto != "[imagen]" else ""
+        texto_final = (
+            (texto_base + " — " if texto_base else "")
+            + "El cliente acaba de enviar esta imagen (posible comprobante de transferencia). "
+            + "Analízala y actua segun las instrucciones de COMPROBANTES DE TRANSFERENCIA."
+            + pedido_ctx_txt
+        )
+
         user_content = [
             {
                 "type": "image",
@@ -497,8 +559,7 @@ async def procesar_mensaje(session_id: str, wa_id: str, texto: str,
             },
             {
                 "type": "text",
-                "text": texto if texto and texto != "[imagen]"
-                        else "El cliente acaba de enviar esta imagen (posible comprobante de transferencia). Analízala y actúa según las instrucciones de COMPROBANTES DE TRANSFERENCIA."
+                "text": texto_final,
             }
         ]
     else:
