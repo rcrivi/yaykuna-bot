@@ -50,15 +50,19 @@ class ApiClient:
 
     async def get_config_publico(self) -> dict:
         try:
+            # Usar /config/bot (requiere bot secret) para evitar bloqueo del WAF de Hostinger
             async with httpx.AsyncClient(timeout=10) as client:
-                r = await client.get(f"{self._url}/config/publico")
+                r = await client.get(
+                    f"{self._url}/config/bot",
+                    headers=self._bot_headers()
+                )
                 r.raise_for_status()
                 data = r.json()
                 tiene_menu = bool(data.get("menu"))
-                print(f"[ApiClient] config_publico OK — menu={'si' if tiene_menu else 'VACIO'} carta_url={bool(data.get('carta_url'))}")
+                print(f"[ApiClient] config OK — menu={'si ({} chars)'.format(len(data.get('menu',''))) if tiene_menu else 'VACIO'}")
                 return data
         except Exception as e:
-            print(f"[ApiClient] config_publico ERROR: {e}")
+            print(f"[ApiClient] config ERROR: {e}")
             raise
 
     async def get_disponibilidad(self, fecha: str) -> dict:
