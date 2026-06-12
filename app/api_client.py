@@ -49,10 +49,17 @@ class ApiClient:
     # ── Endpoints publicos (sin auth) ──────────────────────────
 
     async def get_config_publico(self) -> dict:
-        async with httpx.AsyncClient(timeout=10) as client:
-            r = await client.get(f"{self._url}/config/publico")
-            r.raise_for_status()
-            return r.json()
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                r = await client.get(f"{self._url}/config/publico")
+                r.raise_for_status()
+                data = r.json()
+                tiene_menu = bool(data.get("menu"))
+                print(f"[ApiClient] config_publico OK — menu={'si' if tiene_menu else 'VACIO'} carta_url={bool(data.get('carta_url'))}")
+                return data
+        except Exception as e:
+            print(f"[ApiClient] config_publico ERROR: {e}")
+            raise
 
     async def get_disponibilidad(self, fecha: str) -> dict:
         async with httpx.AsyncClient(timeout=10) as client:
