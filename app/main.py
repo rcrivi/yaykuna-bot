@@ -58,7 +58,7 @@ _flujo_configs: dict[str, dict] = {}
 _flujo_task: asyncio.Task | None = None
 
 # ── Buffer de mensajes (debounce por wa_id) ─────────────────
-_DEBOUNCE_SECS = 3
+_DEBOUNCE_SECS = 10
 _msg_buffer: dict[str, list] = {}
 _msg_timers: dict[str, asyncio.Task] = {}
 
