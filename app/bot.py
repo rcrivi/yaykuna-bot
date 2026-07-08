@@ -536,8 +536,22 @@ async def ejecutar_herramienta(nombre: str, args: dict,
         elif nombre == "agregar_items_pedido":
             sesion = _get_sesion(session_id)
             pedido_id = args.get("pedido_id") or sesion.get("pedido_id")
+
+            # Auto-lookup: si no hay pedido_id en sesión, buscar el más reciente activo
             if not pedido_id:
-                return json.dumps({"error": "No hay un pedido activo en esta sesion. El cliente debe crear un pedido primero."})
+                resultado = await api.buscar_pedido_pendiente(wa_id)
+                pedido    = resultado.get("pedido")
+                situacion = resultado.get("situacion", "")
+                if pedido and situacion not in ("cancelado", "error", "sin_pedidos"):
+                    estado_pedido = pedido.get("estado", "")
+                    if estado_pedido not in ("entregado", "cancelado"):
+                        pedido_id = pedido.get("id")
+                        sesion["pedido_id"] = int(pedido_id)
+                        print(f"[Bot] agregar_items: auto-lookup encontró pedido #{pedido_id} ({estado_pedido})")
+
+            if not pedido_id:
+                return json.dumps({"error": "No se encontro un pedido activo para este cliente. El pedido puede haber sido entregado o no existe."})
+
             items = args.get("items", [])
             if not items:
                 return json.dumps({"error": "items es requerido"})

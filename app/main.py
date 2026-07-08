@@ -57,6 +57,11 @@ _procesados: set[str] = set()
 _flujo_configs: dict[str, dict] = {}
 _flujo_task: asyncio.Task | None = None
 
+# ── Buffer de mensajes (debounce por wa_id) ─────────────────
+_DEBOUNCE_SECS = 3
+_msg_buffer: dict[str, list] = {}
+_msg_timers: dict[str, asyncio.Task] = {}
+
 
 async def _loop_followup():
     """Revisa cada 60s las sesiones inactivas y envia follow-up si corresponde."""
@@ -244,6 +249,70 @@ _INTENTO_TRANSACCIONAL = [
 ]
 
 
+async def _debounce_y_responder(session_key: str, phone_id: str,
+                                 rest_config: dict, api: "ApiClient"):
+    """Espera DEBOUNCE_SECS y luego procesa todos los mensajes acumulados juntos."""
+    await asyncio.sleep(_DEBOUNCE_SECS)
+
+    msgs = _msg_buffer.pop(session_key, [])
+    _msg_timers.pop(session_key, None)
+    if not msgs:
+        return
+
+    wa_id  = msgs[0]["wa_id"]
+    nombre = msgs[0]["nombre"]
+
+    # Combinar textos (ignorar "[imagen]" si hay texto real)
+    textos = [m["texto"] for m in msgs
+              if m.get("texto") and m["texto"] not in ("", "[imagen]", "[imagen: comprobante]")]
+    texto_combinado = "\n".join(textos) if textos else ""
+
+    # Usar la última imagen disponible
+    imagen_b64  = None
+    imagen_mime = "image/jpeg"
+    for m in reversed(msgs):
+        if m.get("imagen_b64"):
+            imagen_b64  = m["imagen_b64"]
+            imagen_mime = m.get("imagen_mime", "image/jpeg")
+            if not texto_combinado:
+                texto_combinado = "[imagen]"
+            break
+
+    if not texto_combinado and not imagen_b64:
+        return
+
+    if len(msgs) > 1:
+        print(f"[Bot] Buffer: {len(msgs)} msgs de {wa_id} combinados → '{texto_combinado[:80]}'")
+
+    try:
+        respuesta = await procesar_mensaje(
+            session_id  = session_key,
+            wa_id       = wa_id,
+            texto       = texto_combinado,
+            nombre      = nombre,
+            rest_config = rest_config,
+            api         = api,
+            imagen_b64  = imagen_b64,
+            imagen_mime = imagen_mime,
+        )
+        ok = await enviar_mensaje(wa_id, respuesta, phone_id=phone_id)
+        if ok:
+            print(f"[Bot] Respuesta enviada a {wa_id}")
+            await api.registrar_mensaje(wa_id, nombre, "saliente", respuesta, origen="bot")
+        else:
+            print(f"[Bot] Error enviando respuesta a {wa_id}")
+    except Exception as e:
+        print(f"[Bot] Error procesando buffer de {wa_id}: {e}")
+        try:
+            await enviar_mensaje(
+                wa_id,
+                "Lo siento, tuve un problema técnico. Por favor intenta nuevamente.",
+                phone_id=phone_id
+            )
+        except Exception:
+            pass
+
+
 async def _procesar_en_background(body: dict):
     """Procesa el mensaje identificando el restaurante por phone_number_id."""
     try:
@@ -314,31 +383,27 @@ async def _procesar_en_background(body: dict):
             print(f"[Bot] {wa_id} bajo control humano -- sin respuesta del bot")
             return
 
-        respuesta = await procesar_mensaje(
-            session_id  = session_id,
-            wa_id       = wa_id,
-            texto       = texto,
-            nombre      = nombre,
-            rest_config = rest_config,
-            api         = api,
-            imagen_b64  = imagen_b64,
-            imagen_mime = imagen_mime,
-        )
+        # ── Buffer + debounce: acumular mensajes y esperar 3 s ──────
+        session_key = session_id  # ya tiene formato phone_id:wa_id
+        if session_key not in _msg_buffer:
+            _msg_buffer[session_key] = []
 
-        ok = await enviar_mensaje(wa_id, respuesta, phone_id=phone_id)
-        if ok:
-            print(f"[Bot] Respuesta enviada a {wa_id}")
-            await api.registrar_mensaje(wa_id, nombre, "saliente", respuesta, origen="bot")
-        else:
-            print(f"[Bot] Error enviando respuesta a {wa_id}")
+        _msg_buffer[session_key].append({
+            "wa_id":      wa_id,
+            "nombre":     nombre,
+            "texto":      texto,
+            "imagen_b64": imagen_b64,
+            "imagen_mime": imagen_mime,
+        })
+
+        # Cancelar timer anterior y crear uno nuevo
+        timer_anterior = _msg_timers.get(session_key)
+        if timer_anterior and not timer_anterior.done():
+            timer_anterior.cancel()
+
+        _msg_timers[session_key] = asyncio.create_task(
+            _debounce_y_responder(session_key, phone_id, rest_config, api)
+        )
 
     except Exception as e:
         print(f"[Bot] Error procesando mensaje de {wa_id}: {e}")
-        try:
-            await enviar_mensaje(
-                wa_id,
-                "Lo siento, tuve un problema tecnico. Por favor intenta nuevamente en un momento.",
-                phone_id=phone_id
-            )
-        except Exception:
-            pass
