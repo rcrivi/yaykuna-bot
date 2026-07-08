@@ -439,13 +439,19 @@ async def ejecutar_herramienta(nombre: str, args: dict,
             notas_extra = args.get("notas", "")
             notas = f"Retiro: {hora_retiro}" + (f" | {notas_extra}" if notas_extra else "") if hora_retiro else notas_extra
 
-            data = await api.crear_pedido(
-                wa_id    = wa_id,
-                nombre   = nombre_cliente,
-                telefono = telefono_cliente,
-                items    = items,
-                notas    = notas,
-            )
+            print(f"[Bot] crear_pedido → wa_id={wa_id}, nombre={nombre_cliente}, tel={telefono_cliente}, items={len(items)}, notas='{notas[:40]}'")
+            try:
+                data = await api.crear_pedido(
+                    wa_id    = wa_id,
+                    nombre   = nombre_cliente,
+                    telefono = telefono_cliente,
+                    items    = items,
+                    notas    = notas,
+                )
+                print(f"[Bot] crear_pedido ← OK: {data}")
+            except Exception as api_err:
+                print(f"[Bot] crear_pedido ← ERROR {type(api_err).__name__}: {api_err}")
+                raise
 
             # Si el pedido supera el monto configurado, agregar aviso de transferencia
             if monto_minimo > 0 and total >= monto_minimo and datos_transf:
