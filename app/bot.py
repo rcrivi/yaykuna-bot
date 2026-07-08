@@ -122,7 +122,9 @@ def _build_system_prompt(rest_config: dict) -> str:
         "- Si el cliente no menciona hora de retiro, calcula hora_actual + 30 minutos y usala sin preguntar.\n"
         "- Al confirmar, muestra un resumen breve: items, total y hora de retiro.\n"
         f"- Si el sistema falla, deriva al {tel}.\n"
-        "- NUNCA digas que no hacemos pedidos -- SI los hacemos.\n\n"
+        "- NUNCA digas que no hacemos pedidos -- SI los hacemos.\n"
+        "- Si el cliente quiere AGREGAR algo a un pedido que ya registraste, usa `agregar_items_pedido`.\n"
+        "  NO crees un pedido nuevo -- agrega al existente. El sistema recuerda el id del pedido de la sesion.\n\n"
         "---\n"
         "## REGLAS DE RESERVA\n"
         "- Verifica SIEMPRE disponibilidad antes de confirmar\n"
@@ -363,6 +365,33 @@ TOOLS = [
         }
     },
     {
+        "name": "agregar_items_pedido",
+        "description": "Agrega uno o mas items a un pedido ya existente (funciona con cualquier estado: pendiente, confirmado, listo, etc). Usar cuando el cliente quiere agregar algo a un pedido que ya fue registrado. NO crear un pedido nuevo en ese caso.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "pedido_id": {
+                    "type": "integer",
+                    "description": "ID del pedido al que se agregan items. Si no lo sabes, omitelo -- el sistema lo obtiene de la sesion."
+                },
+                "items": {
+                    "type": "array",
+                    "description": "Items a agregar",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "nombre":   {"type": "string"},
+                            "precio":   {"type": "integer"},
+                            "cantidad": {"type": "integer"}
+                        },
+                        "required": ["nombre", "precio", "cantidad"]
+                    }
+                }
+            },
+            "required": ["items"]
+        }
+    },
+    {
         "name": "escalar_al_admin",
         "description": "Notifica al equipo del restaurante sobre una consulta que el bot no puede resolver.",
         "input_schema": {
@@ -471,6 +500,11 @@ async def ejecutar_herramienta(nombre: str, args: dict,
                 print(f"[Bot] crear_pedido ← ERROR {type(api_err).__name__}: {api_err}")
                 raise
 
+            # Guardar pedido_id en sesión para poder agregar items después
+            if data.get("id"):
+                sesion = _get_sesion(session_id)
+                sesion["pedido_id"] = int(data["id"])
+
             # Si el pedido supera el monto configurado, agregar aviso de transferencia
             if monto_minimo > 0 and total >= monto_minimo and datos_transf:
                 data["requiere_transferencia"] = True
@@ -493,6 +527,21 @@ async def ejecutar_herramienta(nombre: str, args: dict,
 
         elif nombre == "buscar_pedido_pendiente":
             data = await api.buscar_pedido_pendiente(wa_id)
+            # Guardar pedido_id en sesión si se encontró
+            if data.get("id"):
+                sesion = _get_sesion(session_id)
+                sesion["pedido_id"] = int(data["id"])
+            return json.dumps(data, ensure_ascii=False)
+
+        elif nombre == "agregar_items_pedido":
+            sesion = _get_sesion(session_id)
+            pedido_id = args.get("pedido_id") or sesion.get("pedido_id")
+            if not pedido_id:
+                return json.dumps({"error": "No hay un pedido activo en esta sesion. El cliente debe crear un pedido primero."})
+            items = args.get("items", [])
+            if not items:
+                return json.dumps({"error": "items es requerido"})
+            data = await api.agregar_items_pedido(int(pedido_id), items)
             return json.dumps(data, ensure_ascii=False)
 
         else:
