@@ -179,7 +179,8 @@ def _build_system_prompt(rest_config: dict) -> str:
 
 def _contexto_dinamico(rest_config: dict, nombre_cliente: str = "",
                         es_conocido: bool = False,
-                        config_pub: dict = None) -> str:
+                        config_pub: dict = None,
+                        wa_id: str = "") -> str:
     tz_str = rest_config.get("zona_horaria", "America/Santiago")
     try:
         tz = ZoneInfo(tz_str)
@@ -223,6 +224,12 @@ def _contexto_dinamico(rest_config: dict, nombre_cliente: str = "",
         ctx += f"- **Cliente:** {nombre_cliente} -- ya nos escribio antes, saludalo por nombre.\n"
     elif nombre_cliente:
         ctx += f"- **Nombre del cliente:** {nombre_cliente}\n"
+
+    # Datos de sesion disponibles para pedidos (el sistema los usa como fallback)
+    if wa_id:
+        ctx += f"- **Telefono sesion (wa_id):** {wa_id} -- usar como telefono en crear_pedido si el cliente no da otro.\n"
+    if nombre_cliente:
+        ctx += f"- **Nombre sesion:** {nombre_cliente} -- usar como nombre en crear_pedido sin preguntarlo.\n"
 
     return ctx
 
@@ -282,13 +289,13 @@ TOOLS = [
     },
     {
         "name": "crear_pedido",
-        "description": "Registra un pedido para llevar (takeaway). Llamar cuando el cliente haya confirmado los items. IMPORTANTE: usa el nombre y telefono que ya tienes en la sesion -- NO los pidas al cliente. Si el cliente no indico hora de retiro, calcula hora_actual + 30 minutos y usala directamente.",
+        "description": "Registra un pedido para llevar (takeaway). Llamar en cuanto el cliente confirme los items. nombre y telefono son opcionales -- el sistema los completa automaticamente desde la sesion, NO los pidas al cliente. hora_retiro tambien es opcional -- si no la menciono el cliente, omitela y el sistema calculara hora_actual+30min.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "nombre":      {"type": "string",  "description": "Nombre completo del cliente"},
-                "telefono":    {"type": "string",  "description": "Telefono de contacto"},
-                "hora_retiro": {"type": "string",  "description": "Hora estimada de retiro, ej: 13:00"},
+                "nombre":      {"type": "string",  "description": "Opcional -- se toma de la sesion si no se provee"},
+                "telefono":    {"type": "string",  "description": "Opcional -- se toma del numero WhatsApp si no se provee"},
+                "hora_retiro": {"type": "string",  "description": "Opcional -- hora estimada de retiro ej: 13:00. Si el cliente no la menciono, omitir."},
                 "items": {
                     "type": "array",
                     "description": "Lista de productos pedidos",
@@ -304,7 +311,7 @@ TOOLS = [
                 },
                 "notas": {"type": "string", "description": "Observaciones adicionales del cliente"}
             },
-            "required": ["nombre", "telefono", "hora_retiro", "items"]
+            "required": ["items"]
         }
     },
     {
@@ -411,14 +418,31 @@ async def ejecutar_herramienta(nombre: str, args: dict,
             monto_minimo = int(flujo_config.get("monto_transferencia", 0))
             datos_transf = flujo_config.get("datos_transferencia", "").strip()
 
+            # Fallbacks: nombre y telefono desde sesion si Claude no los proveyó
+            sesion = _get_sesion(session_id)
+            nombre_cliente = args.get("nombre") or sesion.get("nombre") or "Cliente"
+            telefono_cliente = args.get("telefono") or wa_id
+
+            # hora_retiro: si Claude no la calculó, usar hora_actual + 30 min
             hora_retiro = args.get("hora_retiro", "")
+            if not hora_retiro:
+                try:
+                    tz_str = rest_config.get("zona_horaria", "America/Santiago")
+                    from zoneinfo import ZoneInfo
+                    ahora = datetime.now(ZoneInfo(tz_str))
+                    from datetime import timedelta
+                    retiro = ahora + timedelta(minutes=30)
+                    hora_retiro = retiro.strftime("%H:%M")
+                except Exception:
+                    hora_retiro = "a convenir"
+
             notas_extra = args.get("notas", "")
             notas = f"Retiro: {hora_retiro}" + (f" | {notas_extra}" if notas_extra else "") if hora_retiro else notas_extra
 
             data = await api.crear_pedido(
                 wa_id    = wa_id,
-                nombre   = args.get("nombre", ""),
-                telefono = args.get("telefono", ""),
+                nombre   = nombre_cliente,
+                telefono = telefono_cliente,
                 items    = items,
                 notas    = notas,
             )
@@ -591,7 +615,7 @@ async def procesar_mensaje(session_id: str, wa_id: str, texto: str,
         effective_config["menu"] = config_pub["menu"]
 
     system_base    = _build_system_prompt(effective_config)
-    system_dynamic = system_base + _contexto_dinamico(effective_config, nombre_sesion, es_cliente_conocido, config_pub)
+    system_dynamic = system_base + _contexto_dinamico(effective_config, nombre_sesion, es_cliente_conocido, config_pub, wa_id)
 
     max_iteraciones = 5
     for _ in range(max_iteraciones):
