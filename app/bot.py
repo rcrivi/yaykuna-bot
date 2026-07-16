@@ -12,6 +12,14 @@ from .api_client import ApiClient
 
 # -- Cliente Anthropic
 client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+
+
+def _es_nombre_real(nombre: str) -> bool:
+    """Retorna True si el nombre tiene al menos 2 letras reales (no solo emojis o símbolos)."""
+    if not nombre or not nombre.strip():
+        return False
+    letras = sum(1 for c in nombre if c.isalpha())
+    return letras >= 2
 MODEL  = "claude-haiku-4-5-20251001"
 
 # -- Sesiones en memoria (session_id -> dict)
@@ -292,6 +300,11 @@ def _contexto_dinamico(rest_config: dict, nombre_cliente: str = "",
         dias   = historial.get("ultimo_hace_dias", 0)
         items  = historial.get("ultimo_items", [])
 
+        # Usar nombre del historial solo si es un nombre real (no emoji)
+        nombre_historial = historial.get("nombre", "")
+        if _es_nombre_real(nombre_historial) and not nombre_cliente:
+            nombre_cliente = nombre_historial
+
         if dias == 0:
             tiempo_txt = "hoy mismo"
         elif dias == 1:
@@ -317,7 +330,13 @@ def _contexto_dinamico(rest_config: dict, nombre_cliente: str = "",
                     f"\n  Si es natural en la conversacion, puedes preguntar casualmente: "
                     f"'¿Lo de siempre ({items[0]}) o algo diferente hoy?'"
                 )
-        ctx += "\n  Saludalo con calidez, hazle saber que lo recuerdas (sin sonar a robot).\n"
+        if nombre_cliente:
+            ctx += f"\n  Saludalo por nombre ({nombre_cliente}) con calidez.\n"
+        else:
+            ctx += (
+                "\n  Saludalo con calidez sin usar nombre -- no tenemos su nombre real guardado.\n"
+                "  Si te pregunta cual es tu nombre, se honesto: solo tienes su numero de WhatsApp.\n"
+            )
     elif historial and historial.get("es_nuevo", True):
         ctx += "\n- **CLIENTE NUEVO:** primera vez que nos escribe. Dale una bienvenida calida.\n"
 
@@ -686,12 +705,13 @@ async def procesar_mensaje(session_id: str, wa_id: str, texto: str,
         return respuesta
 
     es_cliente_conocido = False
-    if nombre and nombre != wa_id:
+    if nombre and nombre != wa_id and _es_nombre_real(nombre):
         if not sesion.get("nombre"):
             sesion["nombre"]    = nombre
             es_cliente_conocido = True
         nombre_sesion = sesion["nombre"]
     else:
+        # Nombre de WhatsApp es emoji, número o vacío — usar lo que haya en sesión
         nombre_sesion = sesion.get("nombre", "")
 
     # Construir contenido del mensaje (texto simple o imagen + texto)
