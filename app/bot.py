@@ -165,10 +165,12 @@ def _build_system_prompt(rest_config: dict) -> str:
         + _tipo_servicio_prompt(rest_config.get("tipo_servicio", "retiro"))
         +         "- FLUJO -- maximo 3 intercambios para cerrar un pedido:\n"
         "  1. El cliente dice que quiere pedir (y lo que quiere).\n"
-        "  2. Cuando los platos esten claros, muestra un resumen BREVE con precio total y pregunta si agrega algo mas.\n"
+        "  2. Cuando los platos esten claros, muestra un resumen BREVE con: items, precio total, HORA DE RETIRO\n"
+        "     (hora_local del CONTEXTO ACTUAL + 30 minutos), y pregunta si agrega algo mas.\n"
+        "     INCLUIR la hora de retiro en este paso evita confusion si el cliente la pregunta despues.\n"
         "     Una sola pregunta corta y natural -- no listes el menu completo aqui.\n"
         "     Ejemplo (varia el texto, no copies literal):\n"
-        "     'Ceviche Mixto + Risotto — $33.490. ¿Le sumamos algo? Una bebida, postre o entrada, o confirmo asi 👌'\n"
+        "     'Ceviche Mixto + Risotto — $33.490, listo a las 17:30. ¿Le sumamos algo? Bebida, postre o confirmo asi 👌'\n"
         "     EXCEPCION: si algun plato es ambiguo (multiples variantes), primero aclara cual quiere (ver regla 6 de CARTA).\n"
         "  3. Cuando el cliente confirme o diga que no agrega nada mas → registra de inmediato.\n"
         "- CIERRE INMEDIATO: registra el pedido en cuanto el cliente diga 'si', 'listo', 'dale', 'perfecto',\n"
@@ -178,8 +180,10 @@ def _build_system_prompt(rest_config: dict) -> str:
         "  'no seria eso' en espanol informal SIGNIFICA 'si, eso es' -- NO es una correccion.\n"
         "- YA TIENES el nombre y telefono del cliente en tu contexto de sesion.\n"
         "  NO los vuelvas a pedir. Usaos directamente al llamar crear_pedido.\n"
-        "- Si el cliente no menciona hora de retiro, calcula hora_actual + 30 minutos y usala sin preguntar.\n"
-        "- Al confirmar, muestra un resumen: items, total y HORA EXACTA de retiro (ej: 'a las 19:47').\n"
+        "- HORA DE RETIRO: usa SIEMPRE la 'Hora local' del CONTEXTO ACTUAL (no la hora UTC ni otra).\n"
+        "  Si la Hora local del contexto dice 17:00, la hora de retiro es 17:00 + 30 min = 17:30.\n"
+        "  Si el cliente no menciona hora de retiro, calcula hora_local_contexto + 30 min y usala sin preguntar.\n"
+        "- Al confirmar el pedido (crear_pedido), muestra el resumen final: items, total y HORA EXACTA de retiro.\n"
         "  NUNCA digas '20-30 minutos' ni rangos de tiempo -- usa SIEMPRE la hora calculada exacta.\n"
         "  EXCEPCION IMPORTANTE: si el resultado de crear_pedido incluye el campo 'requiere_transferencia': true,\n"
         "  NO muestres hora de retiro en ese mensaje -- sigue en cambio las instrucciones de ## PAGOS Y TRANSFERENCIA.\n"
@@ -373,14 +377,22 @@ def _contexto_dinamico(rest_config: dict, nombre_cliente: str = "",
                 else:
                     cocina_abierta = minutos_inicio <= minutos_ahora < minutos_fin
                     mins_para_cierre = minutos_fin - minutos_ahora
-                if not cocina_abierta:
+                ya_cerro_cocina = minutos_ahora >= minutos_fin if minutos_fin > minutos_inicio else False
+                aun_no_abre_cocina = minutos_ahora < minutos_inicio if minutos_fin > minutos_inicio else False
+                if ya_cerro_cocina:
+                    ctx += (
+                        f"\n[SISTEMA — COCINA CERRADA: la cocina cerro a las {cocina_fin_cfg} hrs. "
+                        f"NO aceptes pedidos nuevos para HOY. "
+                        f"Si el cliente quiere pedir, dile amablemente que la cocina ya cerro y ofrecele "
+                        f"volver manana o llamar al local para consultar.]\n"
+                    )
+                elif aun_no_abre_cocina:
                     ctx += (
                         f"\n[SISTEMA — COCINA AUN NO ABRE: la cocina abre a las {cocina_ini} hrs "
                         f"(cierra a las {cocina_fin_cfg} hrs). "
                         f"Puedes tomar el pedido con normalidad, pero la hora de retiro debe ser "
                         f"DESPUES de las {cocina_ini} hrs — calcula {cocina_ini} + 30 min como minimo. "
-                        f"NO rechaces el pedido. Di algo como: 'Perfecto, lo tenemos listo para las [hora]' "
-                        f"usando una hora posterior a las {cocina_ini}.]\n"
+                        f"NO rechaces el pedido.]\n"
                     )
                 elif mins_para_cierre <= 30:
                     ctx += (
