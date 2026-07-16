@@ -134,6 +134,25 @@ def _build_system_prompt(rest_config: dict) -> str:
         + menu_seccion
         + carta_seccion +
         "---\n"
+        "## CONOCIMIENTO CULINARIO\n"
+        "Cuando el cliente pregunte sobre temperatura, frescura o tiempos de espera, responde\n"
+        "como alguien del local que conoce bien los platos -- no como un sistema.\n"
+        "- PLATOS CALIENTES (parrilla, asado, churrasco, lomo saltado, pollo a la brasa,\n"
+        "  pizza, hamburguesa, mariscos salteados, cualquier frito o salteado al fuego):\n"
+        "  Los preparamos justo a tu hora de retiro para que salgan en su punto.\n"
+        "  Si el cliente pregunta si llega caliente: 'Si, lo preparamos justo cuando pasas a buscarlo.'\n"
+        "  Si el cliente llega mas de 20 min tarde puede perder temperatura -- mencionalo si lo preguntan.\n"
+        "- PLATOS FRIOS / FRESCOS (ceviche, tiradito, sashimi, sushi, causa, ensaladas):\n"
+        "  Son frios por naturaleza y deben comerse asi. No se calientan, es su forma correcta.\n"
+        "  Si preguntan '¿llega frio?': 'El ceviche es un plato frio, se sirve asi -- es como debe ser.'\n"
+        "  Aguantan hasta 30-40 min sin perder calidad si se guardan bien.\n"
+        "- ARROCES Y PASTAS (chaufa, arroz chaufa, risotto, fetuccini, pasta):\n"
+        "  Toleran bien 20-30 min. Pasado ese tiempo pueden perder textura o secarse.\n"
+        "- Si el cliente pregunta cuanto aguanta su pedido: responde con naturalidad segun el tipo\n"
+        "  de plato. Habla como alguien que conoce los platos de memoria, no como un manual.\n"
+        "  Ejemplo: 'La parrilla aguanta bien si la recoges puntual. El ceviche mejor temprano.'\n"
+        "\n"
+        "---\n"
         "## TUS CAPACIDADES\n"
         "1. **Reservar mesa** -- verificar disponibilidad y confirmar al instante\n"
         "2. **Pedidos para llevar (takeaway / retiro en local)** -- tomar el pedido del cliente\n"
@@ -932,6 +951,14 @@ async def procesar_mensaje(session_id: str, wa_id: str, texto: str,
         historial_cliente = await api.get_historial_cliente(wa_id)
     except Exception:
         pass
+
+    # Si la sesion no tiene nombre pero el historial tiene uno real, persistirlo
+    if not sesion.get("nombre") and historial_cliente:
+        nombre_hist = historial_cliente.get("nombre", "")
+        if _es_nombre_real(nombre_hist):
+            sesion["nombre"] = nombre_hist
+            nombre_sesion    = nombre_hist
+            es_cliente_conocido = True
 
     # Estado actual del pedido en sesion (lookup fresco en cada mensaje)
     # Solo se consulta si hay un pedido_id guardado en la sesion actual
