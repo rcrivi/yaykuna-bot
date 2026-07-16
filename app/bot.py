@@ -166,10 +166,14 @@ def _build_system_prompt(rest_config: dict) -> str:
         "  'Perfecto, deja que le pase tu mensaje al equipo y te responden a la brevedad.'\n\n"
         "---\n"
         "## PEDIDOS — REGLAS CRITICAS\n"
-        "- Cuando crear_pedido retorne exitosamente, SIEMPRE debes decirle al cliente su numero de pedido.\n"
-        "  El numero viene en el campo 'id' del resultado. Ejemplo: 'Tu numero de pedido es el #42'.\n"
-        "- NUNCA digas que el sistema no genero numero de pedido. El id SIEMPRE viene en la respuesta.\n"
-        "- Resume el pedido: items, total y hora de retiro.\n\n"
+        "- Si crear_pedido retorna un campo 'id' en la respuesta: el pedido se registro correctamente.\n"
+        "  Di el numero al cliente: 'Tu numero de pedido es el #42'. Resume items, total y hora de retiro.\n"
+        "- Si crear_pedido retorna un campo 'error' o NO incluye 'id': el pedido NO se registro.\n"
+        "  NUNCA JAMAS inventes ni supongas un numero de pedido.\n"
+        "  Informa al cliente con claridad y calma que hubo un problema tecnico y que puede\n"
+        f"  contactar directamente al local al {tel} para confirmar su pedido.\n"
+        "  Ejemplo: 'Tuve un problema tecnico al registrar tu pedido. Por favor llama al [telefono]\n"
+        "  o escribe directamente para que el equipo lo tome. Disculpa el inconveniente!'\n\n"
         "## PAGOS Y TRANSFERENCIA — REGLA CRITICA\n"
         "Si el resultado de crear_pedido incluye el campo 'requiere_transferencia': true:\n"
         "  - EN EL MISMO MENSAJE de confirmacion del pedido (no despues, no en un mensaje aparte),\n"
@@ -566,10 +570,22 @@ async def ejecutar_herramienta(nombre: str, args: dict,
                 print(f"[Bot] crear_pedido ← ERROR {type(api_err).__name__}: {api_err}")
                 raise
 
+            # Validar que la API retornó un id real — NUNCA continuar sin él
+            if not data.get("id"):
+                error_msg = data.get("error", "respuesta inesperada de la API")
+                print(f"[Bot] crear_pedido — respuesta SIN id: {data}")
+                tel_local = rest_config.get("tel", "el restaurante")
+                return json.dumps({
+                    "error": (
+                        f"El pedido no pudo registrarse: {error_msg}. "
+                        f"El cliente debe contactar al local directamente al {tel_local}."
+                    ),
+                    "accion": "informar_error_al_cliente"
+                }, ensure_ascii=False)
+
             # Guardar pedido_id en sesión para poder agregar items después
-            if data.get("id"):
-                sesion = _get_sesion(session_id)
-                sesion["pedido_id"] = int(data["id"])
+            sesion = _get_sesion(session_id)
+            sesion["pedido_id"] = int(data["id"])
 
             # Si el pedido supera el monto configurado, agregar aviso de transferencia
             if monto_minimo > 0 and total >= monto_minimo and datos_transf:
