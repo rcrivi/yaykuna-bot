@@ -125,6 +125,8 @@ def _build_system_prompt(rest_config: dict) -> str:
         "- Si el cliente no menciona hora de retiro, calcula hora_actual + 30 minutos y usala sin preguntar.\n"
         "- Al confirmar, muestra un resumen: items, total y HORA EXACTA de retiro (ej: 'a las 19:47').\n"
         "  NUNCA digas '20-30 minutos' ni rangos de tiempo -- usa SIEMPRE la hora calculada exacta.\n"
+        "  EXCEPCION IMPORTANTE: si el resultado de crear_pedido incluye el campo 'requiere_transferencia': true,\n"
+        "  NO muestres hora de retiro en ese mensaje -- sigue en cambio las instrucciones de ## PAGOS Y TRANSFERENCIA.\n"
         f"- Si el sistema falla, deriva al {tel}.\n"
         "- NUNCA digas que no hacemos pedidos -- SI los hacemos.\n"
         "- Si el cliente quiere AGREGAR algo a un pedido que ya registraste, usa `agregar_items_pedido`.\n"
@@ -137,6 +139,19 @@ def _build_system_prompt(rest_config: dict) -> str:
         "- El sector puede ser: Salon, Terraza, Bar o Privado\n"
         "- Canal siempre se registra como 'WhatsApp'\n"
         "- Maximo 20 personas -- mas personas, escalar al admin\n\n"
+        "---\n"
+        "## CLIENTES RECURRENTES\n"
+        "El contexto actual indica si el cliente es nuevo o ya ha pedido antes.\n"
+        "- Si es cliente recurrente: saludalo con calidez y menciona que es un gusto verlo de nuevo.\n"
+        "  Si pidio algo recientemente, puedes mencionarlo de forma casual y natural.\n"
+        "  Ejemplos de tono (no copiar literal, adaptar a la situacion):\n"
+        "  'Hola de nuevo! Que bueno que vuelves.' / 'Bienvenido de vuelta!' / "
+        "'Que bueno saber de ti otra vez.'\n"
+        "  Si quieres sugerir lo de siempre, hazlo UNA vez de forma sutil, sin insistir:\n"
+        "  '¿Lo de siempre o probamos algo diferente hoy?'\n"
+        "- Si es cliente nuevo: bienvenida calida y normal.\n"
+        "- NUNCA menciones numeros de pedidos anteriores, datos tecnicos ni 'segun nuestros registros'.\n"
+        "  Suena a persona, no a sistema.\n\n"
         "---\n"
         "## ESCALADO AL ADMINISTRADOR\n"
         "Escala cuando:\n"
@@ -155,12 +170,23 @@ def _build_system_prompt(rest_config: dict) -> str:
         "  El numero viene en el campo 'id' del resultado. Ejemplo: 'Tu numero de pedido es el #42'.\n"
         "- NUNCA digas que el sistema no genero numero de pedido. El id SIEMPRE viene en la respuesta.\n"
         "- Resume el pedido: items, total y hora de retiro.\n\n"
-        "## PAGOS Y TRANSFERENCIA\n"
-        "- Si el resultado de crear_pedido incluye 'requiere_transferencia: true',\n"
-        "  DEBES informar al cliente que por el monto del pedido se requiere transferencia bancaria.\n"
-        "- Entrega los datos_transferencia que vienen en el resultado del pedido.\n"
-        "- Indica que el pedido quedara pendiente hasta confirmar el pago.\n"
-        "- El cliente puede tambien pagar en caja al retirar (si el local lo permite).\n\n"
+        "## PAGOS Y TRANSFERENCIA — REGLA CRITICA\n"
+        "Si el resultado de crear_pedido incluye el campo 'requiere_transferencia': true:\n"
+        "  - EN EL MISMO MENSAJE de confirmacion del pedido (no despues, no en un mensaje aparte),\n"
+        "    de forma natural y dentro del mismo hilo de conversacion:\n"
+        "    1. Confirma el pedido: numero de pedido (#id), lista de items y total.\n"
+        "    2. Informa con naturalidad que por el monto del pedido se necesita pago por transferencia\n"
+        "       antes de pasarlo a cocina.\n"
+        "    3. Entrega los datos bancarios que vienen en el campo 'datos_transferencia' del resultado,\n"
+        "       de forma clara y facil de leer.\n"
+        "    4. Indica que en cuanto el cliente envie el comprobante, el pedido pasa a preparacion.\n"
+        "  - NO pongas hora de retiro en este caso -- se confirma despues de verificar el pago.\n"
+        "  - Ejemplo de tono (no copiar literal, adaptar naturalmente):\n"
+        "    'Tu pedido #42 quedo registrado: Lomo Saltado + Chicha Morada, total $XX.XXX.\n"
+        "     Como el monto supera los $XX.XXX, necesitamos que el pago sea por transferencia\n"
+        "     antes de ingresarlo a cocina. Estos son los datos:\n"
+        "     [datos_transferencia]\n"
+        "     Cuando hagas la transferencia, mandame el comprobante y de inmediato lo pasamos a preparar!'\n\n"
         "## COMPROBANTES DE TRANSFERENCIA\n"
         "- Si el cliente te envia una imagen, analízala visualmente.\n"
         "- Si es un comprobante de transferencia bancaria:\n"
@@ -195,7 +221,8 @@ def _build_system_prompt(rest_config: dict) -> str:
 def _contexto_dinamico(rest_config: dict, nombre_cliente: str = "",
                         es_conocido: bool = False,
                         config_pub: dict = None,
-                        wa_id: str = "") -> str:
+                        wa_id: str = "",
+                        historial: dict = None) -> str:
     tz_str = rest_config.get("zona_horaria", "America/Santiago")
     try:
         tz = ZoneInfo(tz_str)
@@ -254,6 +281,41 @@ def _contexto_dinamico(rest_config: dict, nombre_cliente: str = "",
         ctx += f"- **Telefono sesion (wa_id):** {wa_id} -- usar como telefono en crear_pedido si el cliente no da otro.\n"
     if nombre_cliente:
         ctx += f"- **Nombre sesion:** {nombre_cliente} -- usar como nombre en crear_pedido sin preguntarlo.\n"
+
+    # Historial del cliente (reconocimiento cross-sesion)
+    if historial and not historial.get("es_nuevo", True) and historial.get("total_pedidos", 0) > 0:
+        total  = historial["total_pedidos"]
+        dias   = historial.get("ultimo_hace_dias", 0)
+        items  = historial.get("ultimo_items", [])
+
+        if dias == 0:
+            tiempo_txt = "hoy mismo"
+        elif dias == 1:
+            tiempo_txt = "ayer"
+        elif dias <= 6:
+            tiempo_txt = f"hace {dias} dias"
+        elif dias <= 13:
+            tiempo_txt = "la semana pasada"
+        elif dias <= 30:
+            tiempo_txt = f"hace {dias // 7} semanas"
+        else:
+            tiempo_txt = f"hace {dias} dias"
+
+        ctx += (
+            f"\n- **CLIENTE RECURRENTE:** {total} pedido{'s' if total > 1 else ''} anteriores. "
+            f"Ultimo pedido: {tiempo_txt}."
+        )
+        if items:
+            items_txt = ", ".join(items[:2])
+            ctx += f" Ultimos items: {items_txt}."
+            if dias <= 30:
+                ctx += (
+                    f"\n  Si es natural en la conversacion, puedes preguntar casualmente: "
+                    f"'¿Lo de siempre ({items[0]}) o algo diferente hoy?'"
+                )
+        ctx += "\n  Saludalo con calidez, hazle saber que lo recuerdas (sin sonar a robot).\n"
+    elif historial and historial.get("es_nuevo", True):
+        ctx += "\n- **CLIENTE NUEVO:** primera vez que nos escribe. Dale una bienvenida calida.\n"
 
     return ctx
 
@@ -705,8 +767,18 @@ async def procesar_mensaje(session_id: str, wa_id: str, texto: str,
     if config_pub.get("menu") and not effective_config.get("menu"):
         effective_config["menu"] = config_pub["menu"]
 
+    # Historial del cliente para reconocimiento cross-sesion
+    historial_cliente = {}
+    try:
+        historial_cliente = await api.get_historial_cliente(wa_id)
+    except Exception:
+        pass
+
     system_base    = _build_system_prompt(effective_config)
-    system_dynamic = system_base + _contexto_dinamico(effective_config, nombre_sesion, es_cliente_conocido, config_pub, wa_id)
+    system_dynamic = system_base + _contexto_dinamico(
+        effective_config, nombre_sesion, es_cliente_conocido,
+        config_pub, wa_id, historial_cliente
+    )
 
     max_iteraciones = 5
     for _ in range(max_iteraciones):

@@ -110,25 +110,51 @@ async def _loop_followup():
                     inactivo_min = (datetime.utcnow() - sesion["updated"]).seconds // 60
 
                     # No enviar follow-up si el cliente se despidio
-                    DESPEDIDAS = ["saludos","hasta luego","hasta pronto","chao","adios",
-                                  "bye","gracias","ok gracias","no gracias","nada mas",
-                                  "eso era todo","nos vemos","perfect","listo gracias"]
+                    DESPEDIDAS = [
+                        # Despedidas explícitas
+                        "adios", "hasta luego", "hasta pronto", "hasta la proxima",
+                        "nos vemos", "chao", "chao chao", "ciao", "bye", "bye bye",
+                        # Agradecimientos de cierre
+                        "gracias", "muchas gracias", "ok gracias", "listo gracias",
+                        "perfecto gracias", "gracias igual", "gracias de todas formas",
+                        # Cierres de conversación
+                        "nada mas", "nada más", "eso era todo", "con eso basta",
+                        "eso es todo", "ya esta", "ya estuvo", "listo entonces",
+                        "ok entonces", "con eso me basta",
+                        # Chilenas informales
+                        "abrazo", "un abrazo", "abrazo grande", "beso", "besito",
+                        "buenas", "estamos", "quedamos", "cuidense", "cuídate",
+                        "que esten bien", "que este bien", "que disfrutes",
+                        # Con negación
+                        "por ahora no", "no por ahora", "no gracias", "nada mas gracias",
+                        "no necesito", "no por el momento",
+                        # Otras
+                        "saludos", "buen provecho", "excelente gracias",
+                    ]
                     msgs_usuario = [m for m in msgs if m.get("role") == "user"
                                     and isinstance(m.get("content"), str)]
                     if msgs_usuario:
-                        ultimo_usr = msgs_usuario[-1]["content"].strip().lower()
-                        if any(d in ultimo_usr for d in DESPEDIDAS):
+                        # Revisar los ultimos 2 mensajes del cliente (no solo el ultimo)
+                        for msg_reciente in msgs_usuario[-2:]:
+                            txt_reciente = msg_reciente["content"].strip().lower()
+                            if any(d in txt_reciente for d in DESPEDIDAS):
+                                sesion["followup_enviado"] = True  # bloquear futuros
+                                break
+                        if sesion.get("followup_enviado"):
                             continue
 
-                    # Detectar intencion transaccional SOLO en mensajes del usuario
-                    historial_usuario = " ".join(
-                        m["content"].lower() for m in msgs
-                        if m.get("role") == "user" and isinstance(m.get("content"), str)
+                    # Detectar intencion transaccional SOLO en mensajes recientes del usuario
+                    # Usar solo los ultimos 6 mensajes del usuario para evitar falsos positivos
+                    # de conversaciones anteriores dentro de la misma sesion de 4 horas
+                    msgs_recientes = msgs_usuario[-6:] if len(msgs_usuario) > 6 else msgs_usuario
+                    historial_reciente = " ".join(
+                        m["content"].lower() for m in msgs_recientes
                     )
-                    es_pedido  = any(w in historial_usuario for w in
+                    es_pedido  = any(w in historial_reciente for w in
                                      ["pedido","llevar","takeaway","carrito","quiero pedir",
-                                      "para llevar","delivery","plato","menu","carta"])
-                    es_reserva = any(w in historial_usuario for w in
+                                      "para llevar","delivery","plato","menu","carta",
+                                      "quiero pedir","quiero un","dame un","me das"])
+                    es_reserva = any(w in historial_reciente for w in
                                      ["reserva","reservar","mesa","personas","fecha","hora",
                                       "sector","salon","terraza","disponib"])
 

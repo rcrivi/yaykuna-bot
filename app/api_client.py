@@ -290,3 +290,17 @@ class ApiClient:
                 return r.json()
         except Exception as e:
             return {"error": str(e)}
+
+    async def get_historial_cliente(self, wa_id: str) -> dict:
+        """Retorna historial de pedidos de un cliente para reconocimiento y personalizacion."""
+        try:
+            async with httpx.AsyncClient(timeout=5) as client:
+                r = await client.get(
+                    f"{self._url}/pedidos/historial",
+                    params={"wa_id": wa_id},
+                    headers=self._bot_headers()
+                )
+                r.raise_for_status()
+                return r.json()
+        except Exception:
+            return {"es_nuevo": True, "total_pedidos": 0}
