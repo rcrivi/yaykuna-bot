@@ -47,6 +47,29 @@ def _get_sesion(session_id: str) -> dict:
     return _sesiones[session_id]
 
 
+def _tipo_servicio_prompt(tipo: str) -> str:
+    """Devuelve las lineas del prompt segun el tipo de servicio configurado."""
+    if tipo == "delivery_propio":
+        return (
+            "- El restaurante SI acepta pedidos para llevar (retiro en local) Y tambien hace "
+            "delivery propio a domicilio.\n"
+            "- Si el cliente pregunta por delivery, informale que si lo ofrecemos directamente.\n"
+            "- Al tomar el pedido, pregunta si retira en local o quiere delivery a domicilio.\n"
+        )
+    if tipo == "apps":
+        return (
+            "- El restaurante trabaja con apps de delivery (Rappi, PedidosYa u otras aplicaciones).\n"
+            "- Si el cliente pregunta por delivery, derivalo a las apps de delivery correspondientes.\n"
+            "- Para pedidos por WhatsApp, solo se puede retirar en local.\n"
+        )
+    # default: retiro
+    return (
+        "- El restaurante SOLO acepta pedidos para llevar con RETIRO EN LOCAL -- NO hay delivery propio ni apps.\n"
+        "- Si el cliente pregunta por delivery o envio a domicilio, explica amablemente que "
+        "solo manejamos retiro en local.\n"
+    )
+
+
 def _build_system_prompt(rest_config: dict) -> str:
     if rest_config.get("system_prompt"):
         return rest_config["system_prompt"]
@@ -120,8 +143,8 @@ def _build_system_prompt(rest_config: dict) -> str:
         "6. **Info del restaurante** -- horarios, direccion, etc.\n\n"
         "---\n"
         "## PEDIDOS PARA LLEVAR\n"
-        "- El restaurante SI acepta pedidos para llevar (takeaway / retiro en local).\n"
-        "- FLUJO CORTO -- maximo 2 intercambios para cerrar un pedido simple:\n"
+        + _tipo_servicio_prompt(rest_config.get("tipo_servicio", "retiro"))
+        +         "- FLUJO CORTO -- maximo 2 intercambios para cerrar un pedido simple:\n"
         "  1. El cliente dice que quiere pedir (y lo que quiere).\n"
         "  2. Si los platos son claros y unicos en la carta, registra el pedido DE INMEDIATO. No preguntes '¿es correcto?' ni pidas confirmacion extra.\n"
         "     EXCEPCION: si algun plato es ambiguo (multiples variantes), primero aclara cual quiere (ver regla 6 de CARTA).\n"
@@ -307,6 +330,39 @@ def _contexto_dinamico(rest_config: dict, nombre_cliente: str = "",
                 ctx += f"- Reservas y pedidos disponibles solo hasta las {hora_cierre_hoy} hrs hoy.\n"
                 if not pedidos_hoy:
                     ctx += "- Pedidos para llevar NO disponibles hoy -- evento especial con cocina ocupada.\n"
+
+    # Estado de cocina basado en horario configurado
+    if config_pub:
+        cocina_ini = config_pub.get("cocina_inicio", "")
+        cocina_fin_cfg = config_pub.get("cocina_fin", "")
+        if cocina_ini and cocina_fin_cfg:
+            try:
+                hi, mi = [int(x) for x in cocina_ini.split(":")]
+                hf, mf = [int(x) for x in cocina_fin_cfg.split(":")]
+                minutos_ahora  = ahora.hour * 60 + ahora.minute
+                minutos_inicio = hi * 60 + mi
+                minutos_fin    = hf * 60 + mf
+                if minutos_fin < minutos_inicio:
+                    cocina_abierta = minutos_ahora >= minutos_inicio or minutos_ahora < minutos_fin
+                    mins_para_cierre = (minutos_fin + 1440 - minutos_ahora) % 1440
+                else:
+                    cocina_abierta = minutos_inicio <= minutos_ahora < minutos_fin
+                    mins_para_cierre = minutos_fin - minutos_ahora
+                if not cocina_abierta:
+                    ctx += (
+                        f"\n[SISTEMA — COCINA CERRADA: la cocina no acepta pedidos ahora. "
+                        f"Horario de cocina: {cocina_ini} a {cocina_fin_cfg} hrs. "
+                        f"Informa al cliente con amabilidad que no podemos tomar su pedido "
+                        f"en este momento y menciona cuando volvemos.]\n"
+                    )
+                elif mins_para_cierre <= 30:
+                    ctx += (
+                        f"\n[SISTEMA — COCINA CERRANDO PRONTO: faltan {mins_para_cierre} minutos "
+                        f"para que la cocina cierre ({cocina_fin_cfg} hrs). "
+                        f"Mencionalo al cliente si esta por hacer un pedido.]\n"
+                    )
+            except Exception:
+                pass
 
     if nombre_cliente and es_conocido:
         ctx += f"- **Cliente:** {nombre_cliente} -- ya nos escribio antes, saludalo por nombre.\n"
@@ -859,6 +915,8 @@ async def procesar_mensaje(session_id: str, wa_id: str, texto: str,
         effective_config["carta_url"] = config_pub["carta_url"]
     if config_pub.get("menu") and not effective_config.get("menu"):
         effective_config["menu"] = config_pub["menu"]
+    if config_pub.get("tipo_servicio"):
+        effective_config["tipo_servicio"] = config_pub["tipo_servicio"]
 
     # Historial del cliente para reconocimiento cross-sesion
     historial_cliente = {}
