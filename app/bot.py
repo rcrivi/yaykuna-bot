@@ -350,10 +350,12 @@ def _contexto_dinamico(rest_config: dict, nombre_cliente: str = "",
                     mins_para_cierre = minutos_fin - minutos_ahora
                 if not cocina_abierta:
                     ctx += (
-                        f"\n[SISTEMA — COCINA CERRADA: la cocina no acepta pedidos ahora. "
-                        f"Horario de cocina: {cocina_ini} a {cocina_fin_cfg} hrs. "
-                        f"Informa al cliente con amabilidad que no podemos tomar su pedido "
-                        f"en este momento y menciona cuando volvemos.]\n"
+                        f"\n[SISTEMA — COCINA AUN NO ABRE: la cocina abre a las {cocina_ini} hrs "
+                        f"(cierra a las {cocina_fin_cfg} hrs). "
+                        f"Puedes tomar el pedido con normalidad, pero la hora de retiro debe ser "
+                        f"DESPUES de las {cocina_ini} hrs — calcula {cocina_ini} + 30 min como minimo. "
+                        f"NO rechaces el pedido. Di algo como: 'Perfecto, lo tenemos listo para las [hora]' "
+                        f"usando una hora posterior a las {cocina_ini}.]\n"
                     )
                 elif mins_para_cierre <= 30:
                     ctx += (

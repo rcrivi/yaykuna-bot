@@ -153,10 +153,16 @@ async def _loop_followup():
                     es_pedido  = any(w in historial_reciente for w in
                                      ["pedido","llevar","takeaway","carrito","quiero pedir",
                                       "para llevar","delivery","plato","menu","carta",
-                                      "quiero pedir","quiero un","dame un","me das"])
+                                      "quiero un","dame un","me das","paso a buscar",
+                                      "buscar","retirar","retiro","para llevar",
+                                      "me lo preparan","cuanto sale","cuanto cuesta"])
                     es_reserva = any(w in historial_reciente for w in
-                                     ["reserva","reservar","mesa","personas","fecha","hora",
-                                      "sector","salon","terraza","disponib"])
+                                     ["reserva","reservar","mesa","personas","fecha",
+                                      "sector","salon","terraza","disponib",
+                                      "para cuantas","cuantas personas","quiero una mesa"])
+                    # Si ambos coinciden, el pedido tiene prioridad
+                    if es_pedido and es_reserva:
+                        es_reserva = False
 
                     if not (es_pedido or es_reserva):
                         continue
