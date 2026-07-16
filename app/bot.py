@@ -258,7 +258,8 @@ def _contexto_dinamico(rest_config: dict, nombre_cliente: str = "",
                         es_conocido: bool = False,
                         config_pub: dict = None,
                         wa_id: str = "",
-                        historial: dict = None) -> str:
+                        historial: dict = None,
+                        estado_pedido: dict = None) -> str:
     tz_str = rest_config.get("zona_horaria", "America/Santiago")
     try:
         tz = ZoneInfo(tz_str)
@@ -363,6 +364,38 @@ def _contexto_dinamico(rest_config: dict, nombre_cliente: str = "",
             )
     elif historial and historial.get("es_nuevo", True):
         ctx += "\n- **CLIENTE NUEVO:** primera vez que nos escribe. Dale una bienvenida calida.\n"
+
+    # Estado actual del pedido en sesion (lookup fresco antes de cada respuesta)
+    if estado_pedido:
+        situacion = estado_pedido.get("situacion")
+        p         = estado_pedido.get("pedido") or {}
+        pid       = p.get("id", "?")
+        total     = p.get("total", "?")
+        if situacion == "cancelado":
+            ctx += (
+                f"\n[SISTEMA — ESTADO ACTUAL PEDIDO: el pedido #{pid} fue CANCELADO por el restaurante. "
+                f"Ya se envio una notificacion de cancelacion al cliente. "
+                f"Si el cliente pregunta por que fue cancelado, reconoce la cancelacion con naturalidad — "
+                f"NO digas que no sabes nada ni que tu no cancelaste. "
+                f"Explica que fue cancelado desde el local y ofrecele hacer un nuevo pedido si quiere.]\n"
+            )
+        elif situacion == "pendiente":
+            ctx += (
+                f"\n[SISTEMA — ESTADO ACTUAL PEDIDO: pedido #{pid} PENDIENTE de transferencia "
+                f"(total ${total}). Si el cliente pregunta por el estado, recuerdale que esta "
+                f"esperando el comprobante de pago.]\n"
+            )
+        elif situacion == "ya_pagado":
+            ctx += (
+                f"\n[SISTEMA — ESTADO ACTUAL PEDIDO: pedido #{pid} con PAGO CONFIRMADO "
+                f"(transferencia_ok). Esta en preparacion.]\n"
+            )
+        elif situacion == "otro_estado":
+            estado_txt = p.get("estado", "")
+            ctx += (
+                f"\n[SISTEMA — ESTADO ACTUAL PEDIDO: pedido #{pid} en estado '{estado_txt}' "
+                f"(procesado/en preparacion). Informa al cliente segun corresponda.]\n"
+            )
 
     return ctx
 
@@ -834,10 +867,21 @@ async def procesar_mensaje(session_id: str, wa_id: str, texto: str,
     except Exception:
         pass
 
+    # Estado actual del pedido en sesion (lookup fresco en cada mensaje)
+    # Solo se consulta si hay un pedido_id guardado en la sesion actual
+    estado_pedido_actual = {}
+    if sesion.get("pedido_id"):
+        try:
+            estado_pedido_actual = await api.buscar_pedido_pendiente(wa_id)
+            print(f"[Bot] estado pedido #{sesion['pedido_id']}: {estado_pedido_actual.get('situacion')}")
+        except Exception:
+            pass
+
     system_base    = _build_system_prompt(effective_config)
     system_dynamic = system_base + _contexto_dinamico(
         effective_config, nombre_sesion, es_cliente_conocido,
-        config_pub, wa_id, historial_cliente
+        config_pub, wa_id, historial_cliente,
+        estado_pedido=estado_pedido_actual
     )
 
     max_iteraciones = 5
