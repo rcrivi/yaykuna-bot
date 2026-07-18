@@ -179,6 +179,10 @@ def _build_system_prompt(rest_config: dict) -> str:
         "     'Ceviche Mixto + Risotto — $33.490, listo a las 17:30. ¿Le sumamos algo? Bebida, postre o confirmo asi 👌'\n"
         "     EXCEPCION: si algun plato es ambiguo (multiples variantes), primero aclara cual quiere (ver regla 6 de CARTA).\n"
         "  3. Cuando el cliente confirme o diga que no agrega nada mas → registra de inmediato.\n"
+        "- CANTIDADES: si el cliente pide '2 ceviches' o '3 chaufas', usa el campo cantidad en el item\n"
+        "  (ej: nombre='Ceviche Mixto', precio=16990, cantidad=2). NO crees items duplicados.\n"
+        "  En el resumen muestra: '2x Ceviche Mixto $16.990 c/u = $33.980'. El total es la suma de\n"
+        "  todos los subtotales (precio × cantidad por cada item).\n"
         "- CIERRE INMEDIATO: registra el pedido en cuanto el cliente diga 'si', 'listo', 'dale', 'perfecto',\n"
         "  'eso seria', 'no seria eso', 'eso nomas', 'correcto', 'va', 'ok',\n"
         "  'no mas', 'asi esta', 'solo eso', 'nada mas', 'no gracias', 'asi quedo',\n"
@@ -611,7 +615,7 @@ TOOLS = [
                         "properties": {
                             "nombre":   {"type": "string",  "description": "Nombre del plato"},
                             "precio":   {"type": "integer", "description": "Precio unitario en pesos"},
-                            "cantidad": {"type": "integer", "description": "Cantidad"}
+                            "cantidad": {"type": "integer", "description": "Cantidad solicitada. Si el cliente pide '2 ceviches', usar cantidad:2 con el precio unitario — NO crear 2 items separados."}
                         },
                         "required": ["nombre", "precio", "cantidad"]
                     }
