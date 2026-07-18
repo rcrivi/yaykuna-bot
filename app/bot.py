@@ -208,8 +208,32 @@ def _build_system_prompt(rest_config: dict) -> str:
         "- Recolecta los datos de forma conversacional\n"
         "- El sector puede ser: Salon, Terraza, Bar o Privado\n"
         "- Canal siempre se registra como 'WhatsApp'\n"
-        "- Maximo 20 personas -- mas personas, escalar al admin\n\n"
+        "- Maximo 20 personas -- mas personas, escalar al admin\n"
+        "- NOTAS ESPECIALES: si el cliente menciona una ocasion especial (cumpleanos, aniversario,\n"
+        "  propuesta de matrimonio, cena romantica, reunion de negocios, etc.), capturala en el\n"
+        "  campo message al crear la reserva. Tambien pregunta si tiene alguna solicitud especial\n"
+        "  (silla de bebe, decoracion, torta, intolerancia alimentaria).\n"
+        "  Ejemplo: message='Cumpleanos de Maria, solicita mesa con vista al jardin'\n"
+        "- MODIFICACION DE RESERVA: si el cliente quiere cambiar su reserva (fecha, hora,\n"
+        "  sector o personas), usa buscar_reserva para obtener el ID, verifica disponibilidad\n"
+        "  para la nueva fecha/hora si cambia, y luego llama modificar_reserva con los campos\n"
+        "  que cambian. Confirma al cliente el cambio realizado.\n"
+        "- DISPONIBILIDAD AGOTADA: si verificar_disponibilidad devuelve disponible=false o\n"
+        "  sin horarios disponibles:\n"
+        "  1. Informa con amabilidad que no hay lugar para esa fecha/hora.\n"
+        "  2. Ofrece el dia siguiente o sugiere probar otro horario del mismo dia.\n"
+        "  3. Si el cliente insiste y no hay alternativa, escala al equipo.\n"
+        "  Ejemplo: 'Para esa hora ya no tenemos lugar disponible. ¿Te acomoda el mismo dia a\n"
+        "  las [otro horario], o prefieres para manana?'\n\n"
         "---\n"
+        "## RESERVA + PEDIDO COMBINADO\n"
+        "Si el cliente quiere reservar mesa Y tambien pedir comida por anticipado en la misma\n"
+        "conversacion:\n"
+        "1. Completa primero la RESERVA (verificar disponibilidad → confirmar reserva).\n"
+        "2. Una vez confirmada, ofrece tomar el pedido: 'Reserva lista! ¿Quieres aprovechar\n"
+        "   de pedir algo desde ahora para que este listo cuando llegues?'\n"
+        "3. Si el cliente acepta, sigue el flujo normal de pedido para llevar.\n"
+        "NUNCA intentes crear la reserva y el pedido al mismo tiempo en paralelo.\n\n"
         "## CLIENTES RECURRENTES\n"
         "El contexto actual indica si el cliente es nuevo o ya ha pedido antes.\n"
         "- Si es cliente recurrente: saludalo con calidez y menciona que es un gusto verlo de nuevo.\n"
@@ -388,6 +412,34 @@ def _contexto_dinamico(rest_config: dict, nombre_cliente: str = "",
         f"- **Saludo correcto ahora:** '{saludo_hora}' -- usa este saludo si el cliente saluda o si abres la conversacion.\n"
     )
 
+    # Detectar si el restaurante está fuera de horario habitual
+    # Parsea el texto de horarios (ej: "Lunes a Sabado 12:30-23:00 hrs - Domingo 12:30-17:00 hrs")
+    _horarios_txt = rest_config.get("horarios", "")
+    if _horarios_txt:
+        try:
+            import re as _re
+            # Buscar rangos HH:MM-HH:MM en el texto de horarios
+            _rangos = _re.findall(r'(\d{1,2}:\d{2})-(\d{1,2}:\d{2})', _horarios_txt)
+            if _rangos:
+                # Usar el primer rango como horario general
+                _h_abre = _rangos[0][0]   # ej: "12:30"
+                _h_cierra = _rangos[-1][1] # ej: "23:00" (último rango del texto)
+                _ha, _ma = [int(x) for x in _h_abre.split(":")]
+                _hc, _mc = [int(x) for x in _h_cierra.split(":")]
+                _mins_now  = ahora.hour * 60 + ahora.minute
+                _mins_abre = _ha * 60 + _ma
+                _mins_cierra = _hc * 60 + _mc
+                if _mins_now < _mins_abre or _mins_now >= _mins_cierra:
+                    ctx += (
+                        f"\n[SISTEMA — RESTAURANTE FUERA DE HORARIO: el local abre a las {_h_abre} hrs "
+                        f"y cierra a las {_h_cierra} hrs. Ahora son las {ahora.strftime('%H:%M')} hrs. "
+                        f"Puedes responder consultas e informacion, pero NO tomes reservas ni pedidos "
+                        f"para hoy. Para fechas futuras si puedes gestionar reservas normalmente. "
+                        f"Informa al cliente con amabilidad el horario de atencion.]\n"
+                    )
+        except Exception:
+            pass
+
     if config_pub:
         hora_cierre_hoy = config_pub.get("hora_cierre_hoy")
         pedidos_hoy     = config_pub.get("pedidos_hoy", True)
@@ -533,13 +585,24 @@ def _contexto_dinamico(rest_config: dict, nombre_cliente: str = "",
         elif situacion == "ya_pagado":
             ctx += (
                 f"\n[SISTEMA — ESTADO ACTUAL PEDIDO: pedido #{pid} con PAGO CONFIRMADO "
-                f"(transferencia_ok). Esta en preparacion.]\n"
+                f"(transferencia_ok). Esta en preparacion en cocina.]\n"
+            )
+        elif situacion == "en_preparacion":
+            ctx += (
+                f"\n[SISTEMA — ESTADO ACTUAL PEDIDO: pedido #{pid} EN PREPARACION en cocina. "
+                f"Si el cliente pregunta como va su pedido, dile que ya esta en preparacion "
+                f"y que le avisamos cuando este listo para retirar.]\n"
+            )
+        elif situacion == "listo":
+            ctx += (
+                f"\n[SISTEMA — ESTADO ACTUAL PEDIDO: pedido #{pid} LISTO PARA RETIRAR. "
+                f"Si el cliente pregunta, dile que su pedido ya esta listo y puede pasar a buscarlo.]\n"
             )
         elif situacion == "otro_estado":
             estado_txt = p.get("estado", "")
             ctx += (
-                f"\n[SISTEMA — ESTADO ACTUAL PEDIDO: pedido #{pid} en estado '{estado_txt}' "
-                f"(procesado/en preparacion). Informa al cliente segun corresponda.]\n"
+                f"\n[SISTEMA — ESTADO ACTUAL PEDIDO: pedido #{pid} en estado '{estado_txt}'. "
+                f"Informa al cliente segun corresponda.]\n"
             )
 
     return ctx
@@ -594,6 +657,22 @@ TOOLS = [
             "properties": {
                 "reserva_id": {"type": "integer"},
                 "telefono":   {"type": "string"}
+            },
+            "required": ["reserva_id", "telefono"]
+        }
+    },
+    {
+        "name": "modificar_reserva",
+        "description": "Modifica una reserva existente: puede cambiar fecha, hora, sector o numero de personas. Usar cuando el cliente quiere cambiar su reserva. Primero busca la reserva con buscar_reserva para obtener el ID.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "reserva_id": {"type": "integer", "description": "ID de la reserva a modificar"},
+                "telefono":   {"type": "string",  "description": "Telefono del cliente para validar"},
+                "date":       {"type": "string",  "description": "Nueva fecha YYYY-MM-DD (opcional)"},
+                "time":       {"type": "string",  "description": "Nueva hora HH:MM (opcional)"},
+                "sector":     {"type": "string",  "description": "Nuevo sector: Salon, Terraza, Bar o Privado (opcional)"},
+                "guests":     {"type": "integer", "description": "Nuevo numero de personas (opcional)"}
             },
             "required": ["reserva_id", "telefono"]
         }
@@ -721,6 +800,12 @@ async def ejecutar_herramienta(nombre: str, args: dict,
 
         elif nombre == "buscar_reserva":
             data = await api.buscar_reserva_por_telefono(args["telefono"])
+            return json.dumps(data, ensure_ascii=False)
+
+        elif nombre == "modificar_reserva":
+            reserva_id = args["reserva_id"]
+            cambios = {k: v for k, v in args.items() if k not in ("reserva_id", "telefono") and v}
+            data = await api.modificar_reserva(reserva_id, cambios)
             return json.dumps(data, ensure_ascii=False)
 
         elif nombre == "cancelar_reserva":

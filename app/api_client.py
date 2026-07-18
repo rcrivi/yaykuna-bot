@@ -165,14 +165,39 @@ class ApiClient:
                 return {"situacion": "ya_pagado",  "pedido": reciente}
             if estado in ("pending", "pendiente", "new", ""):
                 return {"situacion": "pendiente",  "pedido": reciente}
+            if estado in ("listo", "ready"):
+                return {"situacion": "listo",      "pedido": reciente}
+            if estado in ("confirmado", "confirmed", "en_preparacion"):
+                return {"situacion": "en_preparacion", "pedido": reciente}
 
-            # Otro estado (confirmed, listo, en_preparacion, etc.)
+            # Otro estado (entregado, etc.)
             return {"situacion": "otro_estado", "pedido": reciente}
 
         except Exception as e:
             return {"situacion": "error", "pedido": None, "error": str(e)}
 
+    async def modificar_reserva(self, reserva_id: int, cambios: dict) -> dict:
+        """Modifica una reserva existente (fecha, hora, sector, personas)."""
+        headers = await self._auth_headers()
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.put(
+                f"{self._url}/reservas/{reserva_id}",
+                json=cambios,
+                headers=headers
+            )
+            if r.status_code == 401:
+                self.invalidar_token()
+                headers = await self._auth_headers()
+                r = await client.put(
+                    f"{self._url}/reservas/{reserva_id}",
+                    json=cambios,
+                    headers=headers
+                )
+            r.raise_for_status()
+            return r.json()
+
     async def bajo_control_humano(self, wa_id: str) -> bool:
+
         try:
             async with httpx.AsyncClient(timeout=5) as client:
                 r = await client.get(
