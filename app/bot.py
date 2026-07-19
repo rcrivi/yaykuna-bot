@@ -1084,8 +1084,8 @@ async def procesar_mensaje(session_id: str, wa_id: str, texto: str,
 
     sesion["messages"].append({"role": "user", "content": user_content})
 
-    if len(sesion["messages"]) > 20:
-        sesion["messages"] = sesion["messages"][-20:]
+    if len(sesion["messages"]) > 10:
+        sesion["messages"] = sesion["messages"][-10:]
 
     # Fusionar carta_url y menu desde la API (DB) si no vienen en rest_config (env vars)
     effective_config = dict(rest_config)
