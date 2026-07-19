@@ -545,8 +545,10 @@ def _contexto_dinamico(rest_config: dict, nombre_cliente: str = "",
             tiempo_txt = f"hace {dias} dias"
 
         ctx += (
-            f"\n- **CLIENTE RECURRENTE:** {total} pedido{'s' if total > 1 else ''} anteriores. "
-            f"Ultimo pedido: {tiempo_txt}."
+            f"\n- **CLIENTE RECURRENTE (solo referencia historica — NO es pedido activo):** "
+            f"{total} pedido{'s' if total > 1 else ''} anteriores. Ultimo pedido: {tiempo_txt}. "
+            f"IMPORTANTE: esto es historial pasado. El cliente NO tiene pedido activo ahora. "
+            f"Si hace un nuevo pedido, DEBES llamar crear_pedido — no asumir que ya existe uno."
         )
         if items:
             items_txt = ", ".join(items[:2])
@@ -1147,6 +1149,7 @@ async def procesar_mensaje(session_id: str, wa_id: str, texto: str,
             tool_results = []
             for block in response.content:
                 if block.type == "tool_use":
+                    print(f"[Bot] tool_use → {block.name} args={str(block.input)[:120]}")
                     resultado = await ejecutar_herramienta(
                         block.name, block.input,
                         session_id, wa_id, effective_config, api,
