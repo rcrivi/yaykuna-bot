@@ -150,16 +150,26 @@ async def _loop_followup():
                     historial_reciente = " ".join(
                         m["content"].lower() for m in msgs_recientes
                     )
-                    es_pedido  = any(w in historial_reciente for w in
-                                     ["pedido","llevar","takeaway","carrito","quiero pedir",
-                                      "para llevar","delivery","plato","menu","carta",
-                                      "quiero un","dame un","me das","paso a buscar",
-                                      "buscar","retirar","retiro","para llevar",
-                                      "me lo preparan","cuanto sale","cuanto cuesta"])
-                    es_reserva = any(w in historial_reciente for w in
-                                     ["reserva","reservar","mesa","personas","fecha",
-                                      "sector","salon","terraza","disponib",
-                                      "para cuantas","cuantas personas","quiero una mesa"])
+
+                    # Palabras que indican pedido ACTIVO (el cliente esta ordenando)
+                    PALABRAS_PEDIDO_ACTIVO = [
+                        "pedido","llevar","takeaway","carrito","quiero pedir",
+                        "para llevar","delivery","plato","quiero un","dame un",
+                        "me das","paso a buscar","buscar","retirar","retiro",
+                        "me lo preparan","cuanto sale","cuanto cuesta","quiero comer",
+                        "me pones","me anoto","una porcion","dos porciones",
+                    ]
+                    # Palabras que indican solo consulta de carta/info
+                    PALABRAS_CARTA = ["carta","menu","precio","precios","que tienen","que hay"]
+
+                    es_pedido_activo = any(w in historial_reciente for w in PALABRAS_PEDIDO_ACTIVO)
+                    es_carta_solo    = (not es_pedido_activo and
+                                        any(w in historial_reciente for w in PALABRAS_CARTA))
+                    es_pedido        = es_pedido_activo or es_carta_solo
+                    es_reserva       = any(w in historial_reciente for w in
+                                          ["reserva","reservar","mesa","personas","fecha",
+                                           "sector","salon","terraza","disponib",
+                                           "para cuantas","cuantas personas","quiero una mesa"])
                     # Si ambos coinciden, el pedido tiene prioridad
                     if es_pedido and es_reserva:
                         es_reserva = False
@@ -167,14 +177,34 @@ async def _loop_followup():
                     if not (es_pedido or es_reserva):
                         continue
 
-                    limite = min_pedido if es_pedido else min_reserva
+                    # Tiempos: carta = min_pedido + 5 min, pedido activo = min_pedido, reserva = min_reserva
+                    if es_carta_solo:
+                        limite = min_pedido + 5
+                    elif es_pedido_activo:
+                        limite = min_pedido
+                    else:
+                        limite = min_reserva
+
+                    nombre_cliente = sesion.get("nombre", "").strip()
+                    saludo_nombre  = f" {nombre_cliente}," if nombre_cliente else ","
+
                     if inactivo_min >= limite:
-                        tipo = "pedido" if es_pedido else "reserva"
-                        msg_followup = (
-                            "Sigues por ahi? Cuando quieras continuamos con tu pedido."
-                            if es_pedido else
-                            "Sigues por ahi? Cuando quieras te ayudo con la reserva."
-                        )
+                        if es_carta_solo:
+                            tipo = "carta"
+                            msg_followup = (
+                                f"Hola{saludo_nombre} ¿te sirvió la carta? "
+                                f"Si necesitas ayuda para elegir o quieres hacer un pedido, estamos aquí 😊"
+                            )
+                        elif es_pedido_activo:
+                            tipo = "pedido"
+                            msg_followup = (
+                                f"Sigues por ahí{saludo_nombre} cuando quieras continuamos con tu pedido 👌"
+                            )
+                        else:
+                            tipo = "reserva"
+                            msg_followup = (
+                                f"Sigues por ahí{saludo_nombre} cuando quieras te ayudo con la reserva 😊"
+                            )
                         try:
                             ok = await enviar_mensaje(wa_id, msg_followup, phone_id=phone_id)
                             if ok:
