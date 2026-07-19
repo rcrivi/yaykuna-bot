@@ -143,68 +143,64 @@ async def _loop_followup():
                         if sesion.get("followup_enviado"):
                             continue
 
-                    # Detectar intencion transaccional SOLO en mensajes recientes del usuario
-                    # Usar solo los ultimos 6 mensajes del usuario para evitar falsos positivos
-                    # de conversaciones anteriores dentro de la misma sesion de 4 horas
+                    # ── Clasificar la sesion por lo que OCURRIO, no por keywords ──────
+                    # Si ya hubo transaccion (pedido_id o reserva_id en sesion),
+                    # el followup de pedido/reserva se maneja por su propio flujo.
+                    # Aqui solo manejamos conversaciones SIN transaccion completada.
+
+                    hubo_pedido  = bool(sesion.get("pedido_id"))
+                    hubo_reserva = bool(sesion.get("reserva_id"))
+
+                    # Detectar si el cliente estaba en medio de ordenar/reservar
+                    # (para diferenciar "info general" de "pedido abandonado")
                     msgs_recientes = msgs_usuario[-6:] if len(msgs_usuario) > 6 else msgs_usuario
                     historial_reciente = " ".join(
                         m["content"].lower() for m in msgs_recientes
                     )
+                    es_pedido_activo = any(w in historial_reciente for w in [
+                        "quiero pedir","para llevar","quiero un","dame un","me das",
+                        "paso a buscar","retirar","retiro","quiero comer","me pones",
+                        "me anoto","una porcion","dos porciones","quiero ordenar",
+                    ])
+                    es_reserva_activa = any(w in historial_reciente for w in [
+                        "reserva","reservar","mesa","personas","fecha","sector",
+                        "salon","terraza","disponib","para cuantas","cuantas personas",
+                        "quiero una mesa",
+                    ])
 
-                    # Palabras que indican pedido ACTIVO (el cliente esta ordenando)
-                    PALABRAS_PEDIDO_ACTIVO = [
-                        "pedido","llevar","takeaway","carrito","quiero pedir",
-                        "para llevar","delivery","plato","quiero un","dame un",
-                        "me das","paso a buscar","buscar","retirar","retiro",
-                        "me lo preparan","cuanto sale","cuanto cuesta","quiero comer",
-                        "me pones","me anoto","una porcion","dos porciones",
-                    ]
-                    # Palabras que indican solo consulta de carta/info
-                    PALABRAS_CARTA = ["carta","menu","precio","precios","que tienen","que hay"]
-
-                    es_pedido_activo = any(w in historial_reciente for w in PALABRAS_PEDIDO_ACTIVO)
-                    es_carta_solo    = (not es_pedido_activo and
-                                        any(w in historial_reciente for w in PALABRAS_CARTA))
-                    es_pedido        = es_pedido_activo or es_carta_solo
-                    es_reserva       = any(w in historial_reciente for w in
-                                          ["reserva","reservar","mesa","personas","fecha",
-                                           "sector","salon","terraza","disponib",
-                                           "para cuantas","cuantas personas","quiero una mesa"])
-                    # Si ambos coinciden, el pedido tiene prioridad
-                    if es_pedido and es_reserva:
-                        es_reserva = False
-
-                    if not (es_pedido or es_reserva):
+                    # Sesion con transaccion completada: el followup lo gestiona otro mecanismo
+                    if hubo_pedido or hubo_reserva:
                         continue
 
-                    # Tiempos: carta = min_pedido + 5 min, pedido activo = min_pedido, reserva = min_reserva
-                    if es_carta_solo:
-                        limite = min_pedido + 5
-                    elif es_pedido_activo:
-                        limite = min_pedido
-                    else:
-                        limite = min_reserva
+                    # Sesion SIN transaccion: necesita followup si tuvo al menos 1 intercambio real
+                    if len(msgs_usuario) < 1:
+                        continue
 
                     nombre_cliente = sesion.get("nombre", "").strip()
                     saludo_nombre  = f" {nombre_cliente}," if nombre_cliente else ","
 
+                    if es_reserva_activa and not es_pedido_activo:
+                        tipo   = "reserva"
+                        limite = min_reserva
+                        msg_followup = (
+                            f"Sigues por ahí{saludo_nombre} cuando quieras te ayudo con la reserva 😊"
+                        )
+                    elif es_pedido_activo:
+                        tipo   = "pedido"
+                        limite = min_pedido
+                        msg_followup = (
+                            f"Sigues por ahí{saludo_nombre} cuando quieras continuamos con tu pedido 👌"
+                        )
+                    else:
+                        # Consulta general: carta, precios, horarios, cualquier pregunta
+                        tipo   = "info"
+                        limite = min_pedido + 5  # 8 min por defecto (3 + 5)
+                        msg_followup = (
+                            f"Hola{saludo_nombre} ¿pudimos ayudarte? "
+                            f"Si tienes alguna consulta o quieres hacer un pedido, estamos aquí 😊"
+                        )
+
                     if inactivo_min >= limite:
-                        if es_carta_solo:
-                            tipo = "carta"
-                            msg_followup = (
-                                f"Hola{saludo_nombre} ¿te sirvió la carta? "
-                                f"Si necesitas ayuda para elegir o quieres hacer un pedido, estamos aquí 😊"
-                            )
-                        elif es_pedido_activo:
-                            tipo = "pedido"
-                            msg_followup = (
-                                f"Sigues por ahí{saludo_nombre} cuando quieras continuamos con tu pedido 👌"
-                            )
-                        else:
-                            tipo = "reserva"
-                            msg_followup = (
-                                f"Sigues por ahí{saludo_nombre} cuando quieras te ayudo con la reserva 😊"
-                            )
                         try:
                             ok = await enviar_mensaje(wa_id, msg_followup, phone_id=phone_id)
                             if ok:

@@ -797,6 +797,8 @@ async def ejecutar_herramienta(nombre: str, args: dict,
             reserva = await api.crear_reserva_publica(args, canal=canal)
             reserva_id = reserva.get("id")
             if reserva_id:
+                # Guardar en sesion para que el loop de followup sepa que hubo transaccion
+                _get_sesion(session_id)["reserva_id"] = int(reserva_id)
                 try:
                     await api.confirmar_reserva(reserva_id)
                     reserva["status"] = "confirmed"
