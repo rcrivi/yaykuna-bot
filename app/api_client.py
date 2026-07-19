@@ -241,19 +241,20 @@ class ApiClient:
 
     async def crear_pedido(self, wa_id: str, nombre: str, telefono: str,
                             items: list, notas: str = "") -> dict:
+        payload = {
+            "wa_id":    wa_id,
+            "nombre":   nombre,
+            "telefono": telefono,
+            "items":    items,
+            "notas":    notas,
+            "canal":    "WhatsApp"
+        }
+        url = f"{self._url}/pedidos/publico"
+        print(f"[ApiClient] crear_pedido → POST {url}")
+        print(f"[ApiClient] crear_pedido payload: {payload}")
         async with httpx.AsyncClient(timeout=10) as client:
-            r = await client.post(
-                f"{self._url}/pedidos/publico",
-                json={
-                    "wa_id":    wa_id,
-                    "nombre":   nombre,
-                    "telefono": telefono,
-                    "items":    items,
-                    "notas":    notas,
-                    "canal":    "WhatsApp"
-                },
-                headers=self._bot_headers()
-            )
+            r = await client.post(url, json=payload, headers=self._bot_headers())
+            print(f"[ApiClient] crear_pedido ← HTTP {r.status_code}: {r.text[:300]}")
             r.raise_for_status()
             return r.json()
 
