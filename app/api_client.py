@@ -67,20 +67,32 @@ class ApiClient:
 
     async def get_disponibilidad(self, fecha: str) -> dict:
         async with httpx.AsyncClient(timeout=10) as client:
-            r = await client.get(f"{self._url}/disponibilidad", params={"fecha": fecha})
+            r = await client.get(
+                f"{self._url}/disponibilidad",
+                params={"fecha": fecha},
+                headers=self._bot_headers()   # WAF de Hostinger bloquea sin este header
+            )
             r.raise_for_status()
             return r.json()
 
     async def crear_reserva_publica(self, data: dict, canal: str = "WhatsApp") -> dict:
         data["canal"] = canal
         async with httpx.AsyncClient(timeout=10) as client:
-            r = await client.post(f"{self._url}/reservas/publico", json=data)
+            r = await client.post(
+                f"{self._url}/reservas/publico",
+                json=data,
+                headers=self._bot_headers()
+            )
             r.raise_for_status()
             return r.json()
 
     async def buscar_reserva_por_telefono(self, telefono: str) -> dict:
         async with httpx.AsyncClient(timeout=10) as client:
-            r = await client.get(f"{self._url}/reservas/buscar", params={"telefono": telefono})
+            r = await client.get(
+                f"{self._url}/reservas/buscar",
+                params={"telefono": telefono},
+                headers=self._bot_headers()
+            )
             r.raise_for_status()
             return r.json()
 
@@ -88,7 +100,8 @@ class ApiClient:
         async with httpx.AsyncClient(timeout=10) as client:
             r = await client.put(
                 f"{self._url}/reservas/publico/{reserva_id}/cancelar",
-                json={"telefono": telefono}
+                json={"telefono": telefono},
+                headers=self._bot_headers()
             )
             r.raise_for_status()
             return r.json()

@@ -188,8 +188,12 @@ def _build_system_prompt(rest_config: dict) -> str:
         "  'no mas', 'asi esta', 'solo eso', 'nada mas', 'no gracias', 'asi quedo',\n"
         "  o cualquier expresion de aprobacion o cierre.\n"
         "  'no seria eso' en espanol informal SIGNIFICA 'si, eso es' -- NO es una correccion.\n"
-        "- YA TIENES el nombre y telefono del cliente en tu contexto de sesion.\n"
-        "  NO los vuelvas a pedir. Usaos directamente al llamar crear_pedido.\n"
+        "- DATOS PARA EL PEDIDO -- regla absoluta:\n"
+        "  * Telefono: SIEMPRE tienes el numero WhatsApp del cliente. NUNCA lo pidas.\n"
+        "  * Email: NO se necesita para pedidos. JAMAS lo pidas.\n"
+        "  * Nombre: si ya lo tienes en el contexto, usalo directamente sin preguntarlo.\n"
+        "    Si NO lo tienes, pide SOLO el nombre con una pregunta corta -- nada mas.\n"
+        "  Llama crear_pedido en cuanto tengas los items y (si aplica) el nombre.\n"
         "- HORA DE RETIRO: usa SIEMPRE la 'Hora local' del CONTEXTO ACTUAL (no la hora UTC ni otra).\n"
         "  Si la Hora local del contexto dice 17:00, la hora de retiro es 17:00 + 30 min = 17:30.\n"
         "  Si el cliente no menciona hora de retiro, calcula hora_local_contexto + 30 min y usala sin preguntar.\n"
@@ -209,6 +213,12 @@ def _build_system_prompt(rest_config: dict) -> str:
         "- El sector puede ser: Salon, Terraza, Bar o Privado\n"
         "- Canal siempre se registra como 'WhatsApp'\n"
         "- Maximo 20 personas -- mas personas, escalar al admin\n"
+        "- VALIDAR HORARIO ANTES DE LA API: antes de llamar a verificar_disponibilidad,\n"
+        "  comprueba que la hora solicitada este dentro del horario del restaurante para ese dia.\n"
+        "  Los horarios estan en tu contexto (campo Horarios). Si el cliente pide una hora\n"
+        "  fuera del horario de ese dia (ej: domingo 18:00 cuando el domingo cierra a las 17:00),\n"
+        "  informale ANTES de llamar a la API y sugiere una hora valida.\n"
+        "  Ejemplo: 'El domingo cerramos a las 17:00. ¿Te acomoda a las 16:00 o prefieres otro dia?'\n"
         "- NOTAS ESPECIALES: si el cliente menciona una ocasion especial (cumpleanos, aniversario,\n"
         "  propuesta de matrimonio, cena romantica, reunion de negocios, etc.), capturala en el\n"
         "  campo message al crear la reserva. Tambien pregunta si tiene alguna solicitud especial\n"
@@ -224,7 +234,11 @@ def _build_system_prompt(rest_config: dict) -> str:
         "  2. Ofrece el dia siguiente o sugiere probar otro horario del mismo dia.\n"
         "  3. Si el cliente insiste y no hay alternativa, escala al equipo.\n"
         "  Ejemplo: 'Para esa hora ya no tenemos lugar disponible. ¿Te acomoda el mismo dia a\n"
-        "  las [otro horario], o prefieres para manana?'\n\n"
+        "  las [otro horario], o prefieres para manana?'\n"
+        "- ERROR EN verificar_disponibilidad: si la herramienta devuelve un campo 'error'\n"
+        "  (falla tecnica, no 'sin disponibilidad'), NO inventes flujos alternativos ni recolectes\n"
+        f"  datos manualmente. Di al cliente: 'Tuve un problema tecnico al consultar disponibilidad.\n"
+        f"  Por favor llama directamente al {tel} y el equipo te confirma la reserva. Disculpa!'\n\n"
         "---\n"
         "## RESERVA + PEDIDO COMBINADO\n"
         "Si el cliente quiere reservar mesa Y tambien pedir comida por anticipado en la misma\n"
@@ -789,8 +803,21 @@ async def ejecutar_herramienta(nombre: str, args: dict,
     flujo_config = flujo_config or {}
     try:
         if nombre == "verificar_disponibilidad":
-            data = await api.get_disponibilidad(args["fecha"])
-            return json.dumps(data, ensure_ascii=False)
+            try:
+                data = await api.get_disponibilidad(args["fecha"])
+                return json.dumps(data, ensure_ascii=False)
+            except Exception as disp_err:
+                tel = rest_config.get("tel", "el restaurante")
+                print(f"[Bot] verificar_disponibilidad ERROR: {disp_err}")
+                return json.dumps({
+                    "error": "falla_tecnica",
+                    "accion_requerida": (
+                        f"STOP. NO pidas datos al cliente. Di EXACTAMENTE: "
+                        f"'Tuve un problema técnico al consultar disponibilidad. "
+                        f"Por favor llama directamente al {tel} y el equipo te confirma la reserva. "
+                        f"¡Disculpa el inconveniente!'"
+                    )
+                }, ensure_ascii=False)
 
         elif nombre == "crear_reserva":
             canal   = _get_sesion(session_id).get("canal", "WhatsApp")
