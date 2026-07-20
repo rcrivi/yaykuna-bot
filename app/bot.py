@@ -1165,6 +1165,31 @@ async def procesar_mensaje(session_id: str, wa_id: str, texto: str,
         estado_pedido=estado_pedido_actual
     )
 
+    # Inyectar datos bancarios siempre que estén configurados
+    datos_transf_config = flujo.get("datos_transferencia", "").strip()
+    monto_min_config    = int(flujo.get("monto_transferencia", 0) or 0)
+    if datos_transf_config:
+        system_dynamic += (
+            "\n---\n"
+            "## DATOS BANCARIOS DEL RESTAURANTE\n"
+            "Estos son los datos de transferencia del restaurante. Disponibles SIEMPRE.\n"
+            f"{datos_transf_config}\n\n"
+            f"Monto minimo para EXIGIR transferencia: ${monto_min_config:,}\n\n"
+            "TRANSFERENCIA VOLUNTARIA — cuando el pedido es menor al monto minimo:\n"
+            "- CASO V1: Cliente pide los datos en cualquier momento (antes, durante o despues del pedido)\n"
+            "  → Entrega los datos de arriba de inmediato. NUNCA los inventes ni los omitas.\n"
+            "- CASO V2: Cliente tiene pedido confirmado ('paga en caja') y quiere transferir de todas formas\n"
+            "  → Entrega los datos + espera comprobante + llama marcar_transferencia_ok al recibirlo.\n"
+            "  El pedido sigue en pie, solo se registra la transferencia.\n"
+            "- CASO V3: Cliente manda comprobante directamente sin haber pedido los datos\n"
+            "  → Analiza la imagen, verifica monto y que el destinatario coincida con los datos de arriba,\n"
+            "  llama marcar_transferencia_ok si es correcto.\n"
+            "- CASO V4: Cliente menciona al hacer el pedido que quiere pagar por transferencia\n"
+            "  → Crea el pedido y entrega los datos bancarios en el mismo mensaje de confirmacion.\n"
+            "REGLA CRITICA: NUNCA preguntes al cliente el monto a transferir — ya lo tienes del pedido.\n"
+            "REGLA CRITICA: NUNCA inventes datos bancarios — usa SIEMPRE los de esta seccion.\n"
+        )
+
     max_iteraciones = 5
     for _ in range(max_iteraciones):
         response = await client.messages.create(
