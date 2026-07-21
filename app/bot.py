@@ -566,6 +566,47 @@ def _contexto_dinamico(rest_config: dict, nombre_cliente: str = "",
             except Exception:
                 pass
 
+    # Franjas de reserva configuradas (para preguntas genéricas sin fecha específica)
+    if config_pub:
+        horarios_csv = config_pub.get("horarios", "")
+        if horarios_csv and "," in horarios_csv:
+            try:
+                franjas = [h.strip() for h in horarios_csv.split(",") if h.strip()]
+                if franjas:
+                    ctx += (
+                        f"\n- **Franjas de reserva configuradas:** {', '.join(franjas)}\n"
+                        "  Si el cliente pregunta en general que horarios tienen para reservar\n"
+                        "  (sin especificar fecha ni personas), usa esta lista.\n"
+                        "  Para confirmar disponibilidad en una fecha concreta, igual llama verificar_disponibilidad.\n"
+                    )
+            except Exception:
+                pass
+
+    # Horario de cocina por bloques (para preguntas directas sobre la cocina)
+    if config_pub:
+        hc_raw = config_pub.get("horario_cocina", "")
+        if hc_raw:
+            try:
+                hc = json.loads(hc_raw)
+                bloques_cocina = []
+                lj = hc.get("lun_jue", {})
+                vs = hc.get("vie_sab", {})
+                dm = hc.get("dom", {})
+                if lj.get("ini") and lj.get("fin"):
+                    bloques_cocina.append(f"Lun-Jue: {lj['ini']}-{lj['fin']}")
+                if vs.get("ini") and vs.get("fin"):
+                    bloques_cocina.append(f"Vie-Sab: {vs['ini']}-{vs['fin']}")
+                if dm.get("ini") and dm.get("fin"):
+                    bloques_cocina.append(f"Dom: {dm['ini']}-{dm['fin']}")
+                if bloques_cocina:
+                    ctx += (
+                        f"\n- **Horario de cocina por dia:** {' | '.join(bloques_cocina)}\n"
+                        "  Usa estos datos cuando el cliente pregunte especificamente por la cocina\n"
+                        "  (ej: 'a que hora cierra la cocina el domingo?', 'cuando abre la cocina?').\n"
+                    )
+            except Exception:
+                pass
+
     if nombre_cliente and es_conocido:
         ctx += f"- **Cliente:** {nombre_cliente} -- ya nos escribio antes, saludalo por nombre.\n"
     elif nombre_cliente:
