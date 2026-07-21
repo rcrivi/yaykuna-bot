@@ -546,8 +546,12 @@ def _contexto_dinamico(rest_config: dict, nombre_cliente: str = "",
                     ctx += (
                         f"\n[SISTEMA — COCINA CERRADA: la cocina cerro a las {cocina_fin_cfg} hrs. "
                         f"NO aceptes pedidos nuevos para HOY. "
-                        f"Si el cliente quiere pedir, dile amablemente que la cocina ya cerro y ofrecele "
-                        f"volver manana o llamar al local para consultar.]\n"
+                        f"CRITICO: si el cliente quiere pedir, NO abras con 'con gusto te tomo el pedido' "
+                        f"ni ninguna frase que implique que si lo vas a tomar ahora — eso es contradictorio. "
+                        f"Ve directo al punto: informa que la cocina cerro y ofrece tomar el pedido "
+                        f"para manana desde las {cocina_ini} hrs. "
+                        f"Ejemplo de tono correcto: 'Buenas noches! La cocina cerro a las {cocina_fin_cfg} hrs. "
+                        f"Para manana desde las {cocina_ini} te lo tomo con gusto. ¿Lo pedimos para manana?']\n"
                     )
                 elif aun_no_abre_cocina:
                     ctx += (
