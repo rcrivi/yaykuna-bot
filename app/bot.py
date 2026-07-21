@@ -135,7 +135,12 @@ def _build_system_prompt(rest_config: dict) -> str:
         f"- **Direccion:** {direccion}\n"
         f"- **Telefono:** {tel}\n"
         f"- **Instagram:** {ig}\n"
-        f"- **Horarios:** {horarios}\n\n"
+        f"- **Horario de atencion general:** {horarios}\n"
+        "  IMPORTANTE: este texto es referencia general. Para reservas, las franjas exactas\n"
+        "  las determina verificar_disponibilidad — NO uses este texto para validar si una hora es valida.\n"
+        "  Si el cliente pregunta '¿a qué hora abren?' o '¿cuándo atienden?': usa este horario.\n"
+        "  Si el cliente pregunta '¿qué horas tienen para reservar?': dile que consultas disponibilidad\n"
+        "  y llama verificar_disponibilidad para la fecha que el indique.\n\n"
         "---\n"
         + menu_seccion
         + carta_seccion +
@@ -217,11 +222,18 @@ def _build_system_prompt(rest_config: dict) -> str:
         "\n"
         "## FLUJO DE RESERVA — MAXIMO 2 TURNOS PARA CERRAR\n"
         "TURNO 1 — el cliente da personas/dia/hora. Tu:\n"
-        "  a) Valida que la hora este dentro del horario del restaurante para ese dia\n"
-        "     (los horarios estan en tu contexto). Si esta fuera de horario, informale ANTES\n"
-        "     de llamar a la API. Ej: 'El domingo cerramos a las 17:00. ¿Te acomoda a las 16:00?'\n"
-        "  b) Llama verificar_disponibilidad.\n"
-        "  c) Si hay lugar: en UN SOLO MENSAJE pide todo lo que falta:\n"
+        "  a) Llama verificar_disponibilidad de inmediato. La API es la unica fuente de verdad\n"
+        "     sobre que horas estan disponibles — NO pre-valides horas por tu cuenta.\n"
+        "     Interpreta la respuesta segun el campo 'motivo':\n"
+        "     - motivo='dia_cierre': ese dia de la semana el restaurante no abre.\n"
+        "       Di: 'Ese dia no abrimos. ¿Te acomoda otro dia?' y sugiere dias proximos.\n"
+        "     - motivo='fecha_bloqueada': fecha especifica bloqueada (evento, feriado, etc).\n"
+        "       Di: 'Esa fecha la tenemos reservada. ¿Te acomoda otra fecha cercana?'\n"
+        "     - motivo='sin_horarios' o horarios=[]: sin disponibilidad por completo.\n"
+        "       Di: 'No tenemos lugar disponible para esa fecha. ¿Te acomoda otro dia?'\n"
+        "     - La hora pedida NO aparece en horarios[]: franja no disponible.\n"
+        "       Di: 'Para esa hora no tenemos lugar. Las franjas disponibles son: [lista].'\n"
+        "  b) Si hay lugar: en UN SOLO MENSAJE pide todo lo que falta:\n"
         "     - Si NO tienes el nombre del cliente: pide nombre + email + sector + ocasion especial\n"
         "       Ejemplo: '¡Hay lugar! Para confirmar: ¿tu nombre completo, email y sector\n"
         "       preferido (Salon, Terraza, Bar o Privado)? ¿Hay alguna ocasion especial?'\n"
@@ -436,33 +448,38 @@ def _contexto_dinamico(rest_config: dict, nombre_cliente: str = "",
         f"- **Saludo correcto ahora:** '{saludo_hora}' -- usa este saludo si el cliente saluda o si abres la conversacion.\n"
     )
 
-    # Detectar si el restaurante está fuera de horario habitual
-    # Parsea el texto de horarios (ej: "Lunes a Sabado 12:30-23:00 hrs - Domingo 12:30-17:00 hrs")
-    _horarios_txt = rest_config.get("horarios", "")
-    if _horarios_txt:
-        try:
-            import re as _re
-            # Buscar rangos HH:MM-HH:MM en el texto de horarios
-            _rangos = _re.findall(r'(\d{1,2}:\d{2})-(\d{1,2}:\d{2})', _horarios_txt)
-            if _rangos:
-                # Usar el primer rango como horario general
-                _h_abre = _rangos[0][0]   # ej: "12:30"
-                _h_cierra = _rangos[-1][1] # ej: "23:00" (último rango del texto)
-                _ha, _ma = [int(x) for x in _h_abre.split(":")]
-                _hc, _mc = [int(x) for x in _h_cierra.split(":")]
-                _mins_now  = ahora.hour * 60 + ahora.minute
-                _mins_abre = _ha * 60 + _ma
-                _mins_cierra = _hc * 60 + _mc
-                if _mins_now < _mins_abre or _mins_now >= _mins_cierra:
-                    ctx += (
-                        f"\n[SISTEMA — RESTAURANTE FUERA DE HORARIO: el local abre a las {_h_abre} hrs "
-                        f"y cierra a las {_h_cierra} hrs. Ahora son las {ahora.strftime('%H:%M')} hrs. "
-                        f"Puedes responder consultas e informacion, pero NO tomes reservas ni pedidos "
-                        f"para hoy. Para fechas futuras si puedes gestionar reservas normalmente. "
-                        f"Informa al cliente con amabilidad el horario de atencion.]\n"
-                    )
-        except Exception:
-            pass
+    # Detectar si el restaurante está fuera de horario — usa horario_local JSON (estructurado)
+    # Fallback: si no hay JSON, omite el aviso (mejor no avisar que avisar mal)
+    if config_pub:
+        _local_raw = config_pub.get("horario_local", "")
+        if _local_raw:
+            try:
+                import json as _jlocal
+                _local = _jlocal.loads(_local_raw)
+                _dow = ahora.weekday()  # 0=Lun … 6=Dom
+                if _dow <= 3:
+                    _bloque = _local.get("lun_jue", {})
+                elif _dow <= 5:
+                    _bloque = _local.get("vie_sab", {})
+                else:
+                    _bloque = _local.get("dom", {})
+                _h_abre   = (_bloque.get("ini") or "").strip()[:5]
+                _h_cierra = (_bloque.get("fin") or "").strip()[:5]
+                if _h_abre and _h_cierra:
+                    _ha, _ma = [int(x) for x in _h_abre.split(":")]
+                    _hc, _mc = [int(x) for x in _h_cierra.split(":")]
+                    _mins_now    = ahora.hour * 60 + ahora.minute
+                    _mins_abre   = _ha * 60 + _ma
+                    _mins_cierra = _hc * 60 + _mc
+                    if _mins_now < _mins_abre or _mins_now >= _mins_cierra:
+                        ctx += (
+                            f"\n[SISTEMA — LOCAL FUERA DE HORARIO: el restaurante abre a las {_h_abre} "
+                            f"y cierra a las {_h_cierra} hrs hoy. Ahora son las {ahora.strftime('%H:%M')} hrs. "
+                            f"Puedes responder consultas e informacion, pero NO tomes reservas ni pedidos "
+                            f"para hoy. Para fechas futuras si puedes gestionar reservas normalmente.]\n"
+                        )
+            except Exception:
+                pass
 
     if config_pub:
         hora_cierre_hoy = config_pub.get("hora_cierre_hoy")
@@ -488,8 +505,28 @@ def _contexto_dinamico(rest_config: dict, nombre_cliente: str = "",
 
     # Estado de cocina basado en horario configurado
     if config_pub:
-        cocina_ini = config_pub.get("cocina_inicio", "")
-        cocina_fin_cfg = config_pub.get("cocina_fin", "")
+        # Intentar leer horario_cocina por bloques (nuevo) con fallback a campos legacy
+        cocina_ini = ""
+        cocina_fin_cfg = ""
+        horario_cocina_raw = config_pub.get("horario_cocina", "")
+        if horario_cocina_raw:
+            try:
+                import json as _json
+                horario_cocina = _json.loads(horario_cocina_raw)
+                dow = ahora.weekday()  # 0=Lun … 6=Dom
+                if dow <= 3:
+                    bloque = horario_cocina.get("lun_jue", {})
+                elif dow <= 5:
+                    bloque = horario_cocina.get("vie_sab", {})
+                else:
+                    bloque = horario_cocina.get("dom", {})
+                cocina_ini     = bloque.get("ini", "")
+                cocina_fin_cfg = bloque.get("fin", "")
+            except Exception:
+                pass
+        if not cocina_ini:  # fallback a campos legacy
+            cocina_ini     = config_pub.get("cocina_inicio", "")
+            cocina_fin_cfg = config_pub.get("cocina_fin", "")
         if cocina_ini and cocina_fin_cfg:
             try:
                 hi, mi = [int(x) for x in cocina_ini.split(":")]
