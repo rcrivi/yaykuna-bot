@@ -586,6 +586,18 @@ def _contexto_dinamico(rest_config: dict, nombre_cliente: str = "",
             except Exception:
                 pass
 
+    # Sectores visibles para reservas (viene filtrado por activo=1 desde la API)
+    if config_pub:
+        sectores_pub = config_pub.get("sectores", [])
+        if sectores_pub:
+            nombres_sectores = [s.get("nombre", "") for s in sectores_pub if s.get("nombre")]
+            if nombres_sectores:
+                ctx += (
+                    f"\n- **Sectores disponibles para reservas:** {', '.join(nombres_sectores)}\n"
+                    "  CRITICO: al pedir sector al cliente, ofrece SOLO estos sectores.\n"
+                    "  NO menciones ni sugieras sectores que no aparezcan en esta lista.\n"
+                )
+
     # Horario de cocina por bloques (para preguntas directas sobre la cocina)
     if config_pub:
         hc_raw = config_pub.get("horario_cocina", "")
