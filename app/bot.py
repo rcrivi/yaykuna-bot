@@ -176,14 +176,16 @@ def _build_system_prompt(rest_config: dict) -> str:
         + _tipo_servicio_prompt(rest_config.get("tipo_servicio", "retiro"))
         +         "- FLUJO -- maximo 3 intercambios para cerrar un pedido:\n"
         "  1. El cliente dice que quiere pedir (y lo que quiere).\n"
-        "  2. Cuando los platos esten claros, muestra un resumen BREVE con: items, precio total, HORA DE RETIRO\n"
-        "     (hora_local del CONTEXTO ACTUAL + 30 minutos), y pregunta si agrega algo mas.\n"
+        f"  2. Cuando los platos esten claros, muestra un resumen BREVE con: items, precio total, HORA DE RETIRO\n"
+        f"     (hora_local del CONTEXTO ACTUAL + {rest_config.get('tiempo_preparacion', 30)} minutos), y pregunta si agrega algo mas.\n"
         "     INCLUIR la hora de retiro en este paso evita confusion si el cliente la pregunta despues.\n"
         "     Una sola pregunta corta y natural -- no listes el menu completo aqui.\n"
         "     Ejemplo (varia el texto, no copies literal):\n"
         "     'Ceviche Mixto + Risotto — $33.490, listo a las 17:30. ¿Le sumamos algo? Bebida, postre o confirmo asi 👌'\n"
         "     EXCEPCION: si algun plato es ambiguo (multiples variantes), primero aclara cual quiere (ver regla 6 de CARTA).\n"
         "  3. Cuando el cliente confirme o diga que no agrega nada mas → registra de inmediato.\n"
+        f"- TIEMPO DE RETIRO: el pedido tarda {rest_config.get('tiempo_preparacion', 30)} minutos en prepararse.\n"
+        "  hora_retiro = hora_local_contexto + tiempo_preparacion. Usa SIEMPRE ese calculo.\n"
         "- CANTIDADES: si el cliente pide '2 ceviches' o '3 chaufas', usa el campo cantidad en el item\n"
         "  (ej: nombre='Ceviche Mixto', precio=16990, cantidad=2). NO crees items duplicados.\n"
         "  En el resumen muestra: '2x Ceviche Mixto $16.990 c/u = $33.980'. El total es la suma de\n"
@@ -1035,7 +1037,8 @@ async def ejecutar_herramienta(nombre: str, args: dict,
                     from zoneinfo import ZoneInfo
                     ahora = datetime.now(ZoneInfo(tz_str))
                     from datetime import timedelta
-                    retiro = ahora + timedelta(minutes=30)
+                    mins_prep = int(rest_config.get("tiempo_preparacion", 30))
+                    retiro = ahora + timedelta(minutes=mins_prep)
                     hora_retiro = retiro.strftime("%H:%M")
                 except Exception:
                     hora_retiro = "a convenir"
@@ -1315,6 +1318,8 @@ async def procesar_mensaje(session_id: str, wa_id: str, texto: str,
         effective_config["menu"] = config_pub["menu"]
     if config_pub.get("tipo_servicio"):
         effective_config["tipo_servicio"] = config_pub["tipo_servicio"]
+    if config_pub.get("tiempo_preparacion"):
+        effective_config["tiempo_preparacion"] = int(config_pub["tiempo_preparacion"])
 
     # Historial del cliente para reconocimiento cross-sesion
     historial_cliente = {}
