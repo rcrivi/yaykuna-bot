@@ -3,6 +3,7 @@ Nucleo del agente de reservas -- multi-restaurante.
 Mantiene sesiones separadas por restaurante (phone_id:wa_id).
 """
 import os
+import re
 import json
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -1431,15 +1432,22 @@ async def procesar_mensaje(session_id: str, wa_id: str, texto: str,
             "REGLA CRITICA: NUNCA inventes datos bancarios — usa SIEMPRE los de esta seccion.\n"
         )
 
-    max_iteraciones = 5
+    max_iteraciones = 6  # +1 para absorber posible retry del guardrail
+    _force_tool = False
+
     for _ in range(max_iteraciones):
-        response = await client.messages.create(
+        kwargs = dict(
             model      = MODEL,
             max_tokens = 1024,
             system     = system_dynamic,
             tools      = TOOLS,
-            messages   = sesion["messages"]
+            messages   = sesion["messages"],
         )
+        if _force_tool:
+            kwargs["tool_choice"] = {"type": "any"}  # fuerza al modelo a usar un tool
+            _force_tool = False
+
+        response = await client.messages.create(**kwargs)
 
         if response.stop_reason == "tool_use":
             sesion["messages"].append({
@@ -1469,6 +1477,35 @@ async def procesar_mensaje(session_id: str, wa_id: str, texto: str,
         for block in response.content:
             if hasattr(block, "text"):
                 texto_respuesta += block.text
+
+        # ── GUARDRAIL: detectar número de pedido hallucinated ─────────────
+        # Si el bot menciona "#NNN" pero nunca llamó crear_pedido (pedido_id no seteado),
+        # es una hallucination. Interceptamos antes de enviar al cliente.
+        _menciona_numero_pedido = bool(re.search(r'#\d{2,}', texto_respuesta))
+        _contexto_pedido = any(w in texto_respuesta.lower() for w in [
+            "pedido", "registrado", "confirmado", "anotado", "queda", "quedó", "retiro"
+        ])
+        _pedido_real = bool(sesion.get("pedido_id"))
+
+        if _menciona_numero_pedido and _contexto_pedido and not _pedido_real:
+            _numero_fake = re.search(r'#\d+', texto_respuesta)
+            print(f"[Bot] GUARDRAIL — hallucination detectada: bot mencionó "
+                  f"{_numero_fake.group() if _numero_fake else '#?'} sin llamar crear_pedido — forzando retry")
+            # Guardamos la respuesta hallucinated en historial (contexto para el retry)
+            # pero NO la retornamos al cliente
+            sesion["messages"].append({"role": "assistant", "content": texto_respuesta})
+            sesion["messages"].append({
+                "role": "user",
+                "content": (
+                    "[SISTEMA — ERROR CRITICO: acabas de mencionar un número de pedido (#NNN) "
+                    "pero NO llamaste el tool `crear_pedido`. Ese número NO existe en la base de datos. "
+                    "ACCIÓN REQUERIDA: llama `crear_pedido` AHORA con los ítems que acordaste con el cliente. "
+                    "No respondas con texto hasta haber ejecutado el tool.]"
+                )
+            })
+            _force_tool = True
+            continue  # retry con tool_choice=any en la siguiente iteración
+        # ─────────────────────────────────────────────────────────────────
 
         sesion["messages"].append({
             "role":    "assistant",
