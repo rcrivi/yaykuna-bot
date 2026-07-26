@@ -406,6 +406,47 @@ def _build_system_prompt(rest_config: dict) -> str:
         "  PASO 4 — Si [SISTEMA] indica que no hay pedido o pide el numero: pregunta '¿Cual es el numero de tu pedido?'\n"
         "- Si la imagen NO es un comprobante de transferencia, responde normalmente.\n\n"
         "---\n"
+        "## PROTOCOLO DE AMENAZAS Y EXTORSION\n"
+        "\n"
+        "### Senales que activan el protocolo\n"
+        "\n"
+        "ALTA CONFIANZA — una sola basta:\n"
+        "- Pedir dinero/cuota bajo amenaza ('colaborar', 'derecho de piso', 'vacuna', 'tienes X horas')\n"
+        "- Mencionar sicario, sicariato, gatillero\n"
+        "- Amenaza explícita de daño a personas del restaurante\n"
+        "- 'atentado' dirigido al local o sus trabajadores\n"
+        "- 'quemar' o 'incendiar' dirigido al local\n"
+        "- Extorsion, extorsionar, cobro ilegal\n"
+        "- Organizacion criminal + exigencia de pago o 'proteccion'\n"
+        "\n"
+        "REQUIERE COMBINACION — no activa solo:\n"
+        "- 'cupo' → solo si viene con pago/organizacion (cupo de reserva es normal)\n"
+        "- 'bomba' → solo si es amenaza directa (no 'bomba de chocolate')\n"
+        "- 'matar/liquidar' → solo si va dirigido al negocio o personas del local\n"
+        "- 'organizacion/banda' → solo si va acompanado de exigencia o amenaza\n"
+        "\n"
+        "### Comportamiento cuando se detecta amenaza\n"
+        "\n"
+        "PASO 1 — Responder EXACTAMENTE con este mensaje, sin cambiar ni una palabra:\n"
+        "\n"
+        "'Restaurante Yaykuna informa:\n"
+        "No respondemos a amenazas ni extorsiones de ningún tipo.\n"
+        "Si alguien está intentando intimidar o extorsionar al restaurante, comunícalo de inmediato a las autoridades competentes:\n"
+        "· Carabineros: 133\n"
+        "· Policía de Investigaciones: 134\n"
+        "El restaurante Yaykuna opera con transparencia y legalidad. No tenemos ninguna relación con actividades delictivas.\n"
+        "Si tu consulta es legítima sobre reservas o pedidos, con gusto te ayudaremos.\n"
+        "De lo contrario, no existe conversación posible.'\n"
+        "\n"
+        "PASO 2 — Llamar escalar_al_admin de inmediato con:\n"
+        "- motivo: 'ALERTA AMENAZA: extorsion o intimidacion detectada'\n"
+        "- mensaje: incluir hora exacta de recepcion + copia textual del mensaje amenazante.\n"
+        "  Formato: '[HH:MM] Mensaje recibido: <texto del cliente>'\n"
+        "\n"
+        "PASO 3 — MODO SILENCIO: despues del Paso 1, NO responder ningun mensaje\n"
+        "adicional de esta sesion. Silencio total. Sin excepciones.\n"
+        "\n"
+        "---\n"
         "## FORMATO DE RESPUESTAS\n"
         "- Respuestas cortas y directas (maximo 3-4 parrafos)\n"
         "- Sin Markdown complejo (no tablas, no encabezados #)\n"
@@ -958,9 +999,14 @@ async def ejecutar_herramienta(nombre: str, args: dict,
 
         elif nombre == "escalar_al_admin":
             sesion = _get_sesion(session_id)
+            motivo_esc = args.get("motivo", "")
+            # Marcar sesion como amenaza para activar modo silencio
+            if "ALERTA AMENAZA" in motivo_esc or "amenaza" in motivo_esc.lower() or "extorsion" in motivo_esc.lower():
+                sesion["amenaza_detectada"] = True
+                print(f"[Bot] AMENAZA DETECTADA — sesion {session_id} marcada en modo silencio")
             await api.registrar_escalado(
                 wa_id   = wa_id,
-                motivo  = args["motivo"],
+                motivo  = motivo_esc,
                 mensaje = args["mensaje"],
                 nombre  = sesion.get("nombre", "")
             )
@@ -1109,6 +1155,11 @@ async def procesar_mensaje(session_id: str, wa_id: str, texto: str,
 
     sesion = _get_sesion(session_id)
     sesion["updated"] = datetime.utcnow()
+
+    # Modo silencio: sesion marcada por amenaza/extorsion detectada
+    if sesion.get("amenaza_detectada"):
+        print(f"[Bot] Sesion {session_id} en modo silencio (amenaza detectada) — mensaje ignorado")
+        return ""
 
     flujo = {}
     try:

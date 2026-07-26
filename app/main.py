@@ -107,6 +107,10 @@ async def _loop_followup():
                     if sesion.get("followup_enviado"):
                         continue
 
+                    # No enviar follow-up a sesiones marcadas por amenaza/extorsion
+                    if sesion.get("amenaza_detectada"):
+                        continue
+
                     inactivo_min = (datetime.utcnow() - sesion["updated"]).seconds // 60
 
                     # No enviar follow-up si el cliente se despidio
@@ -353,6 +357,9 @@ async def _debounce_y_responder(session_key: str, phone_id: str,
             imagen_b64  = imagen_b64,
             imagen_mime = imagen_mime,
         )
+        if not respuesta:
+            print(f"[Bot] Modo silencio activo para {wa_id} — respuesta ignorada")
+            return
         ok = await enviar_mensaje(wa_id, respuesta, phone_id=phone_id)
         if ok:
             print(f"[Bot] Respuesta enviada a {wa_id}")
