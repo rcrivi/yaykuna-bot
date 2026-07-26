@@ -156,16 +156,29 @@ async def _loop_followup():
                     hubo_pedido  = bool(sesion.get("pedido_id"))
                     hubo_reserva = bool(sesion.get("reserva_id"))
 
-                    # Detectar si el cliente estaba en medio de ordenar/reservar
-                    # (para diferenciar "info general" de "pedido abandonado")
+                    # ── Señal 1: ¿el bot terminó con una pregunta? ──────────────
+                    # Es la señal más confiable de conversación activa,
+                    # independiente de las palabras que usó el cliente.
+                    ultimo_bot_txt = ""
+                    if ultimo and isinstance(ultimo.get("content"), str):
+                        ultimo_bot_txt = ultimo["content"]
+                    bot_hizo_pregunta = "?" in ultimo_bot_txt
+
+                    # ── Señal 2: keywords para distinguir pedido vs reserva ──────
+                    # Se usan SOLO para elegir el mensaje apropiado, no para decidir
+                    # si el follow-up es contextual o genérico (eso lo decide el "?").
+                    # Incluir último mensaje del bot para capturar contexto del flujo.
                     msgs_recientes = msgs_usuario[-6:] if len(msgs_usuario) > 6 else msgs_usuario
                     historial_reciente = " ".join(
                         m["content"].lower() for m in msgs_recientes
-                    )
+                        if isinstance(m.get("content"), str)
+                    ) + " " + ultimo_bot_txt.lower()
+
                     es_pedido_activo = any(w in historial_reciente for w in [
                         "quiero pedir","para llevar","quiero un","dame un","me das",
                         "paso a buscar","retirar","retiro","quiero comer","me pones",
                         "me anoto","una porcion","dos porciones","quiero ordenar",
+                        "lo registro","la registro","te lo registro","registro de una",
                     ])
                     es_reserva_activa = any(w in historial_reciente for w in [
                         "reserva","reservar","mesa","personas","fecha","sector",
@@ -184,7 +197,29 @@ async def _loop_followup():
                     nombre_cliente = sesion.get("nombre", "").strip()
                     saludo_nombre  = f" {nombre_cliente}," if nombre_cliente else ","
 
-                    if es_reserva_activa and not es_pedido_activo:
+                    # ── Clasificación: bot preguntó → contextual; si no → keywords → genérico ──
+                    if bot_hizo_pregunta:
+                        # Conversación activa — mensaje cercano según contexto detectado
+                        if es_pedido_activo and not es_reserva_activa:
+                            tipo   = "pedido"
+                            limite = min_pedido
+                            msg_followup = (
+                                f"Sigues por ahí{saludo_nombre} cuando quieras continuamos con tu pedido 👌"
+                            )
+                        elif es_reserva_activa and not es_pedido_activo:
+                            tipo   = "reserva"
+                            limite = min_reserva
+                            msg_followup = (
+                                f"Sigues por ahí{saludo_nombre} cuando quieras te ayudo con la reserva 😊"
+                            )
+                        else:
+                            # Pregunta sin contexto claro — follow-up neutro y cálido
+                            tipo   = "activo"
+                            limite = min_pedido
+                            msg_followup = (
+                                f"Sigues por ahí{saludo_nombre} estamos aquí cuando quieras 😊"
+                            )
+                    elif es_reserva_activa and not es_pedido_activo:
                         tipo   = "reserva"
                         limite = min_reserva
                         msg_followup = (
@@ -197,9 +232,9 @@ async def _loop_followup():
                             f"Sigues por ahí{saludo_nombre} cuando quieras continuamos con tu pedido 👌"
                         )
                     else:
-                        # Consulta general: carta, precios, horarios, cualquier pregunta
+                        # Consulta general sin pregunta pendiente del bot
                         tipo   = "info"
-                        limite = min_pedido + 5  # 8 min por defecto (3 + 5)
+                        limite = min_pedido + 5  # 8 min por defecto
                         msg_followup = (
                             f"Hola{saludo_nombre} ¿pudimos ayudarte? "
                             f"Si tienes alguna consulta o quieres hacer un pedido, estamos aquí 😊"
