@@ -391,10 +391,9 @@ async def _debounce_y_responder(session_key: str, phone_id: str,
                     pass
                 break
 
-            # Pausa breve para capturar mensajes que llegaron justo al terminar
-            await asyncio.sleep(0.3)
-            if session_key not in _msg_buffer:
-                break
+            # Si llegaron mensajes durante el procesamiento, su propio timer los manejará.
+            # No los procesamos aquí para evitar dobles respuestas en rápida sucesión.
+            break
     finally:
         _processing.discard(session_key)
 
