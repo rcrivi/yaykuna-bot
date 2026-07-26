@@ -61,6 +61,7 @@ _flujo_task: asyncio.Task | None = None
 _DEBOUNCE_SECS = 10
 _msg_buffer: dict[str, list] = {}
 _msg_timers: dict[str, asyncio.Task] = {}
+_processing: set[str] = set()  # sesiones con respuesta en curso — evita dobles respuestas
 
 
 async def _loop_followup():
@@ -313,69 +314,89 @@ _INTENTO_TRANSACCIONAL = [
 
 async def _debounce_y_responder(session_key: str, phone_id: str,
                                  rest_config: dict, api: "ApiClient"):
-    """Espera DEBOUNCE_SECS y luego procesa todos los mensajes acumulados juntos."""
+    """Espera DEBOUNCE_SECS y luego procesa todos los mensajes acumulados juntos.
+    Si la sesión ya está siendo procesada, descarta — el procesador activo recogerá
+    los mensajes pendientes al terminar su ciclo."""
     await asyncio.sleep(_DEBOUNCE_SECS)
 
-    msgs = _msg_buffer.pop(session_key, [])
-    _msg_timers.pop(session_key, None)
-    if not msgs:
+    # Si ya hay un procesamiento en curso para esta sesión, salir —
+    # el ciclo activo recogerá los mensajes del buffer al terminar
+    if session_key in _processing:
+        print(f"[Bot] Debounce de {session_key} descartado — ya hay procesamiento activo")
         return
 
-    wa_id  = msgs[0]["wa_id"]
-    nombre = msgs[0]["nombre"]
-
-    # Combinar textos (ignorar "[imagen]" si hay texto real)
-    textos = [m["texto"] for m in msgs
-              if m.get("texto") and m["texto"] not in ("", "[imagen]", "[imagen: comprobante]")]
-    texto_combinado = "\n".join(textos) if textos else ""
-
-    # Usar la última imagen disponible
-    imagen_b64  = None
-    imagen_mime = "image/jpeg"
-    for m in reversed(msgs):
-        if m.get("imagen_b64"):
-            imagen_b64  = m["imagen_b64"]
-            imagen_mime = m.get("imagen_mime", "image/jpeg")
-            if not texto_combinado:
-                texto_combinado = "[imagen]"
-            break
-
-    if not texto_combinado and not imagen_b64:
-        return
-
-    if len(msgs) > 1:
-        print(f"[Bot] Buffer: {len(msgs)} msgs de {wa_id} combinados → '{texto_combinado[:80]}'")
-
+    _processing.add(session_key)
     try:
-        respuesta = await procesar_mensaje(
-            session_id  = session_key,
-            wa_id       = wa_id,
-            texto       = texto_combinado,
-            nombre      = nombre,
-            rest_config = rest_config,
-            api         = api,
-            imagen_b64  = imagen_b64,
-            imagen_mime = imagen_mime,
-        )
-        if not respuesta:
-            print(f"[Bot] Modo silencio activo para {wa_id} — respuesta ignorada")
-            return
-        ok = await enviar_mensaje(wa_id, respuesta, phone_id=phone_id)
-        if ok:
-            print(f"[Bot] Respuesta enviada a {wa_id}")
-            await api.registrar_mensaje(wa_id, nombre, "saliente", respuesta, origen="bot")
-        else:
-            print(f"[Bot] Error enviando respuesta a {wa_id}")
-    except Exception as e:
-        print(f"[Bot] Error procesando buffer de {wa_id}: {e}")
-        try:
-            await enviar_mensaje(
-                wa_id,
-                "Lo siento, tuve un problema técnico. Por favor intenta nuevamente.",
-                phone_id=phone_id
-            )
-        except Exception:
-            pass
+        # Loop: procesar tandas hasta vaciar el buffer (cubre mensajes que llegan durante el procesamiento)
+        while True:
+            msgs = _msg_buffer.pop(session_key, [])
+            _msg_timers.pop(session_key, None)
+            if not msgs:
+                break
+
+            wa_id  = msgs[0]["wa_id"]
+            nombre = msgs[0]["nombre"]
+
+            # Combinar textos (ignorar "[imagen]" si hay texto real)
+            textos = [m["texto"] for m in msgs
+                      if m.get("texto") and m["texto"] not in ("", "[imagen]", "[imagen: comprobante]")]
+            texto_combinado = "\n".join(textos) if textos else ""
+
+            # Usar la última imagen disponible
+            imagen_b64  = None
+            imagen_mime = "image/jpeg"
+            for m in reversed(msgs):
+                if m.get("imagen_b64"):
+                    imagen_b64  = m["imagen_b64"]
+                    imagen_mime = m.get("imagen_mime", "image/jpeg")
+                    if not texto_combinado:
+                        texto_combinado = "[imagen]"
+                    break
+
+            if not texto_combinado and not imagen_b64:
+                break
+
+            if len(msgs) > 1:
+                print(f"[Bot] Buffer: {len(msgs)} msgs de {wa_id} combinados → '{texto_combinado[:80]}'")
+
+            try:
+                respuesta = await procesar_mensaje(
+                    session_id  = session_key,
+                    wa_id       = wa_id,
+                    texto       = texto_combinado,
+                    nombre      = nombre,
+                    rest_config = rest_config,
+                    api         = api,
+                    imagen_b64  = imagen_b64,
+                    imagen_mime = imagen_mime,
+                )
+                if not respuesta:
+                    print(f"[Bot] Modo silencio activo para {wa_id} — respuesta ignorada")
+                    break
+                ok = await enviar_mensaje(wa_id, respuesta, phone_id=phone_id)
+                if ok:
+                    print(f"[Bot] Respuesta enviada a {wa_id}")
+                    await api.registrar_mensaje(wa_id, nombre, "saliente", respuesta, origen="bot")
+                else:
+                    print(f"[Bot] Error enviando respuesta a {wa_id}")
+            except Exception as e:
+                print(f"[Bot] Error procesando buffer de {wa_id}: {e}")
+                try:
+                    await enviar_mensaje(
+                        wa_id,
+                        "Lo siento, tuve un problema técnico. Por favor intenta nuevamente.",
+                        phone_id=phone_id
+                    )
+                except Exception:
+                    pass
+                break
+
+            # Pausa breve para capturar mensajes que llegaron justo al terminar
+            await asyncio.sleep(0.3)
+            if session_key not in _msg_buffer:
+                break
+    finally:
+        _processing.discard(session_key)
 
 
 async def _procesar_en_background(body: dict):
