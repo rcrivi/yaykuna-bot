@@ -539,8 +539,13 @@ def _contexto_dinamico(rest_config: dict, nombre_cliente: str = "",
                         ctx += (
                             f"\n[SISTEMA — LOCAL CERRADO: el restaurante cerro a las {_h_cierra} hrs. "
                             f"Ahora son las {ahora.strftime('%H:%M')} hrs. "
-                            f"NO tomes pedidos ni reservas para hoy. "
-                            f"Informa al cliente con amabilidad que ya cerramos y que manana abrimos a las {_h_abre} hrs. "
+                            f"NO tomes pedidos ni registres pedidos para hoy — aunque el cliente haya estado armando uno durante la conversacion. "
+                            f"IMPORTANTE: si el cliente tenia un pedido en progreso, NO muestres hora de retiro para hoy ni resumen de pedido para hoy. "
+                            f"En cambio, informa con amabilidad y calidez que el restaurante acaba de cerrar "
+                            f"y ofrece directamente registrar el mismo pedido para manana desde las {_h_abre} hrs. "
+                            f"Ejemplo correcto: 'Rodrigo, la cocina acabo de cerrar hace un momento. "
+                            f"Pero si quieres puedo dejarte anotada la Mega Parrillada para manana — "
+                            f"¿a que hora te vendria bien retirarla?' "
                             f"Para reservas de fechas futuras si puedes ayudar normalmente.]\n"
                         )
             except Exception:
