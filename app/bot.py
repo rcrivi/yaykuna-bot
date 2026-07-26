@@ -492,6 +492,9 @@ def _contexto_dinamico(rest_config: dict, nombre_cliente: str = "",
         f"- **Saludo correcto ahora:** '{saludo_hora}' -- usa este saludo si el cliente saluda o si abres la conversacion.\n"
     )
 
+    # Flag compartido entre bloques de horario
+    _local_antes_de_abrir = False
+
     # Detectar si el restaurante está fuera de horario — usa horario_local JSON (estructurado)
     # Fallback: si no hay JSON, omite el aviso (mejor no avisar que avisar mal)
     if config_pub:
@@ -515,12 +518,30 @@ def _contexto_dinamico(rest_config: dict, nombre_cliente: str = "",
                     _mins_now    = ahora.hour * 60 + ahora.minute
                     _mins_abre   = _ha * 60 + _ma
                     _mins_cierra = _hc * 60 + _mc
-                    if _mins_now < _mins_abre or _mins_now >= _mins_cierra:
+                    _local_antes_de_abrir = _mins_now < _mins_abre  # noqa: F841 — usado más abajo
+                    _local_ya_cerro       = _mins_now >= _mins_cierra
+                    if _local_antes_de_abrir:
+                        # Calcular hora de retiro exacta: apertura + tiempo_preparacion configurado
+                        _mins_prep = int(config_pub.get("tiempo_preparacion", 30)) if config_pub else 30
+                        _mins_retiro = _mins_abre + _mins_prep
+                        _h_retiro = f"{_mins_retiro // 60:02d}:{_mins_retiro % 60:02d}"
                         ctx += (
-                            f"\n[SISTEMA — LOCAL FUERA DE HORARIO: el restaurante abre a las {_h_abre} "
-                            f"y cierra a las {_h_cierra} hrs hoy. Ahora son las {ahora.strftime('%H:%M')} hrs. "
-                            f"Puedes responder consultas e informacion, pero NO tomes reservas ni pedidos "
-                            f"para hoy. Para fechas futuras si puedes gestionar reservas normalmente.]\n"
+                            f"\n[SISTEMA — LOCAL AUN CERRADO: el restaurante abre hoy a las {_h_abre} hrs. "
+                            f"Ahora son las {ahora.strftime('%H:%M')} hrs — el local todavia no ha abierto. "
+                            f"DEBES informar al cliente que el local esta cerrado y que abre a las {_h_abre} hrs. "
+                            f"PUEDES tomar pedidos: la hora de retiro es {_h_retiro} hrs ({_h_abre} + {_mins_prep} min de preparacion). "
+                            f"Al confirmar el pedido usa SIEMPRE {_h_retiro} como hora de retiro — no calcules otra. "
+                            f"NO tomes reservas para hoy — solo para fechas futuras. "
+                            f"Tono correcto al recibir un pedido: 'Buenas noches! El restaurante esta cerrado ahora, "
+                            f"pero abrimos hoy a las {_h_abre} hrs. Con gusto te anoto el pedido para retirar a las {_h_retiro}.']\n"
+                        )
+                    elif _local_ya_cerro:
+                        ctx += (
+                            f"\n[SISTEMA — LOCAL CERRADO: el restaurante cerro a las {_h_cierra} hrs. "
+                            f"Ahora son las {ahora.strftime('%H:%M')} hrs. "
+                            f"NO tomes pedidos ni reservas para hoy. "
+                            f"Informa al cliente con amabilidad que ya cerramos y que manana abrimos a las {_h_abre} hrs. "
+                            f"Para reservas de fechas futuras si puedes ayudar normalmente.]\n"
                         )
             except Exception:
                 pass
@@ -586,6 +607,9 @@ def _contexto_dinamico(rest_config: dict, nombre_cliente: str = "",
                     mins_para_cierre = minutos_fin - minutos_ahora
                 ya_cerro_cocina = minutos_ahora >= minutos_fin if minutos_fin > minutos_inicio else False
                 aun_no_abre_cocina = minutos_ahora < minutos_inicio if minutos_fin > minutos_inicio else False
+                # Si el local ya inyectó "ANTES DE ABRIR", el bloque de cocina no agrega nada nuevo
+                if aun_no_abre_cocina and _local_antes_de_abrir:
+                    aun_no_abre_cocina = False
                 if ya_cerro_cocina:
                     ctx += (
                         f"\n[SISTEMA — COCINA CERRADA: la cocina cerro a las {cocina_fin_cfg} hrs. "
@@ -598,11 +622,16 @@ def _contexto_dinamico(rest_config: dict, nombre_cliente: str = "",
                         f"Para manana desde las {cocina_ini} te lo tomo con gusto. ¿Lo pedimos para manana?']\n"
                     )
                 elif aun_no_abre_cocina:
+                    _mins_prep_c = int(config_pub.get("tiempo_preparacion", 30)) if config_pub else 30
+                    _hi_c, _mi_c = [int(x) for x in cocina_ini.split(":")]
+                    _mins_retiro_c = _hi_c * 60 + _mi_c + _mins_prep_c
+                    _h_retiro_c = f"{_mins_retiro_c // 60:02d}:{_mins_retiro_c % 60:02d}"
                     ctx += (
                         f"\n[SISTEMA — COCINA AUN NO ABRE: la cocina abre a las {cocina_ini} hrs "
                         f"(cierra a las {cocina_fin_cfg} hrs). "
-                        f"Puedes tomar el pedido con normalidad, pero la hora de retiro debe ser "
-                        f"DESPUES de las {cocina_ini} hrs — calcula {cocina_ini} + 30 min como minimo. "
+                        f"Puedes tomar el pedido con normalidad. "
+                        f"La hora de retiro es {_h_retiro_c} hrs ({cocina_ini} + {_mins_prep_c} min de preparacion). "
+                        f"Usa SIEMPRE {_h_retiro_c} como hora de retiro — no calcules otra. "
                         f"NO rechaces el pedido.]\n"
                     )
                 elif mins_para_cierre <= 30:
