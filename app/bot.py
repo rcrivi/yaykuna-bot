@@ -1161,6 +1161,44 @@ async def procesar_mensaje(session_id: str, wa_id: str, texto: str,
         print(f"[Bot] Sesion {session_id} en modo silencio (amenaza detectada) — mensaje ignorado")
         return ""
 
+    # Pre-filtro de amenazas: keywords de alta confianza detectados antes de llamar al modelo
+    # Garantiza que el mensaje institucional salga EXACTO, sin pasar por la IA
+    _AMENAZA_KEYWORDS = [
+        "sicario", "sicariato", "gatillero",
+        "extorsion", "extorsionar", "extorsionamos", "extorsionando",
+        "derecho de piso",
+        "cobro ilegal",
+        "atentado",
+        "quemar el local", "incendiar el local", "quemar tu local", "incendiar tu local",
+        "organizacion criminal", "banda criminal",
+    ]
+    _MENSAJE_INSTITUCIONAL = (
+        "Restaurante Yaykuna informa:\n"
+        "No respondemos a amenazas ni extorsiones de ningún tipo.\n"
+        "Si alguien está intentando intimidar o extorsionar al restaurante, comunícalo de inmediato a las autoridades competentes:\n"
+        "· Carabineros: 133\n"
+        "· Policía de Investigaciones: 134\n"
+        "El restaurante Yaykuna opera con transparencia y legalidad. No tenemos ninguna relación con actividades delictivas.\n"
+        "Si tu consulta es legítima sobre reservas o pedidos, con gusto te ayudaremos.\n"
+        "De lo contrario, no existe conversación posible."
+    )
+    _texto_lower = texto.lower()
+    if any(kw in _texto_lower for kw in _AMENAZA_KEYWORDS):
+        sesion["amenaza_detectada"] = True
+        print(f"[Bot] PRE-FILTRO AMENAZA — sesion {session_id} — keyword detectado — enviando respuesta institucional")
+        try:
+            tz_amenaza = ZoneInfo(rest_config.get("zona_horaria", "America/Santiago"))
+            hora_amenaza = datetime.now(tz_amenaza).strftime("%H:%M")
+            await api.registrar_escalado(
+                wa_id   = wa_id,
+                motivo  = "ALERTA AMENAZA: extorsion o intimidacion detectada (pre-filtro Python)",
+                mensaje = f"[{hora_amenaza}] Mensaje recibido: {texto}",
+                nombre  = sesion.get("nombre", ""),
+            )
+        except Exception as e:
+            print(f"[Bot] Error al escalar amenaza (pre-filtro): {e}")
+        return _MENSAJE_INSTITUCIONAL
+
     flujo = {}
     try:
         flujo = await api.get_flujo_config()
