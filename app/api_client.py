@@ -343,3 +343,29 @@ class ApiClient:
                 return r.json()
         except Exception:
             return {"es_nuevo": True, "total_pedidos": 0}
+
+    async def get_nombre_cliente(self, wa_id: str) -> str:
+        """Recupera el nombre persistente guardado para este wa_id. Retorna '' si no existe."""
+        try:
+            async with httpx.AsyncClient(timeout=5) as client:
+                r = await client.get(
+                    f"{self._url}/clientes/nombre",
+                    params={"wa_id": wa_id},
+                    headers=self._bot_headers()
+                )
+                r.raise_for_status()
+                return r.json().get("nombre", "")
+        except Exception:
+            return ""
+
+    async def guardar_nombre_cliente(self, wa_id: str, nombre: str) -> None:
+        """Persiste el nombre del cliente asociado a su wa_id."""
+        try:
+            async with httpx.AsyncClient(timeout=5) as client:
+                await client.put(
+                    f"{self._url}/clientes/nombre",
+                    json={"wa_id": wa_id, "nombre": nombre},
+                    headers=self._bot_headers()
+                )
+        except Exception:
+            pass

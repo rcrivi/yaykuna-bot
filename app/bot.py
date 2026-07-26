@@ -1107,6 +1107,14 @@ async def ejecutar_herramienta(nombre: str, args: dict,
             sesion = _get_sesion(session_id)
             sesion["pedido_id"] = int(data["id"])
 
+            # Persistir nombre del cliente en DB si es un nombre real
+            if nombre_cliente and nombre_cliente != "Cliente" and _es_nombre_real(nombre_cliente):
+                try:
+                    await api.guardar_nombre_cliente(wa_id, nombre_cliente)
+                    print(f"[Bot] Nombre persistido en DB: {nombre_cliente} ({wa_id})")
+                except Exception:
+                    pass
+
             # Si el pedido supera el monto configurado, agregar aviso de transferencia
             if monto_minimo > 0 and total >= monto_minimo and datos_transf:
                 data["requiere_transferencia"] = True
@@ -1248,6 +1256,16 @@ async def procesar_mensaje(session_id: str, wa_id: str, texto: str,
         sesion["messages"].append({"role": "assistant", "content": respuesta})
         return respuesta
 
+    # Si la sesion es nueva y no hay nombre en memoria, intentar recuperarlo desde DB
+    if not sesion.get("nombre") and not sesion.get("messages"):
+        try:
+            _nombre_db = await api.get_nombre_cliente(wa_id)
+            if _nombre_db and _es_nombre_real(_nombre_db):
+                sesion["nombre"] = _nombre_db
+                print(f"[Bot] Nombre persistente cargado desde DB: {_nombre_db} ({wa_id})")
+        except Exception:
+            pass
+
     es_cliente_conocido = False
     if nombre and nombre != wa_id and _es_nombre_real(nombre):
         if not sesion.get("nombre"):
@@ -1255,7 +1273,7 @@ async def procesar_mensaje(session_id: str, wa_id: str, texto: str,
             es_cliente_conocido = True
         nombre_sesion = sesion["nombre"]
     else:
-        # Nombre de WhatsApp es emoji, número o vacío — usar lo que haya en sesión
+        # Nombre de WhatsApp es emoji, número o vacío — usar lo que haya en sesión (o DB)
         nombre_sesion = sesion.get("nombre", "")
 
     # Construir contenido del mensaje (texto simple o imagen + texto)
