@@ -148,13 +148,15 @@ class ApiClient:
             data["imagen_mime"] = imagen_mime
         try:
             async with httpx.AsyncClient(timeout=10) as client:
-                await client.post(
+                r = await client.post(
                     f"{self._url}/wa/mensajes/registrar",
                     json=data,
                     headers=self._bot_headers()
                 )
-        except Exception:
-            pass
+                if r.status_code != 200:
+                    print(f"[ApiClient] registrar_mensaje HTTP {r.status_code} wa_id={wa_id}: {r.text[:120]}")
+        except Exception as e:
+            print(f"[ApiClient] registrar_mensaje ERROR wa_id={wa_id}: {e}")
 
     async def buscar_pedido_pendiente(self, wa_id: str) -> dict:
         """Retorna contexto completo del pedido mas reciente del cliente para manejo de comprobantes."""
