@@ -278,13 +278,15 @@ class ApiClient:
             }
 
     async def registrar_escalado(self, wa_id: str, motivo: str,
-                                  mensaje: str, nombre: str = "") -> None:
+                                  mensaje: str, nombre: str = "",
+                                  tipo: str = "consulta") -> None:
         try:
             async with httpx.AsyncClient(timeout=5) as client:
                 await client.post(
                     f"{self._url}/bot/escalado",
                     json={"wa_id": wa_id, "motivo": motivo,
-                          "mensaje": mensaje, "nombre": nombre},
+                          "mensaje": mensaje, "nombre": nombre,
+                          "tipo": tipo},
                     headers=self._bot_headers()
                 )
         except Exception:

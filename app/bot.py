@@ -184,7 +184,10 @@ def _build_system_prompt(rest_config: dict) -> str:
         "     Una sola pregunta corta y natural -- no listes el menu completo aqui.\n"
         "     Ejemplo (varia el texto, no copies literal):\n"
         "     'Ceviche Mixto + Risotto — $33.490, listo a las 17:30. ¿Le sumamos algo? Bebida, postre o confirmo asi 👌'\n"
-        "     EXCEPCION: si algun plato es ambiguo (multiples variantes), primero aclara cual quiere (ver regla 6 de CARTA).\n"
+        "     EXCEPCION: si algun plato es ambiguo (multiples variantes) o viene de una imagen,\n"
+        "     primero confirma cual quiere (ver regla 6 de CARTA). PERO si al confirmar el plato\n"
+        "     el cliente usa una expresion de cierre ('solo eso', 'nada mas', 'eso nomas', etc.),\n"
+        "     NO hagas el paso 2 — saltate el upsell y registra el pedido de inmediato.\n"
         "  3. Cuando el cliente confirme o diga que no agrega nada mas → registra de inmediato.\n"
         f"- TIEMPO DE RETIRO: el pedido tarda {rest_config.get('tiempo_preparacion', 30)} minutos en prepararse.\n"
         "  hora_retiro = hora_local_contexto + tiempo_preparacion. Usa SIEMPRE ese calculo.\n"
@@ -196,6 +199,9 @@ def _build_system_prompt(rest_config: dict) -> str:
         "  'eso seria', 'no seria eso', 'eso nomas', 'correcto', 'va', 'ok',\n"
         "  'no mas', 'asi esta', 'solo eso', 'nada mas', 'no gracias', 'asi quedo',\n"
         "  o cualquier expresion de aprobacion o cierre.\n"
+        "  IMPORTANTE: esto aplica sin importar en que paso del flujo este -- si el cliente\n"
+        "  responde con cierre a cualquier pregunta (confirmacion de plato, imagen, upsell),\n"
+        "  registra de inmediato sin hacer preguntas adicionales.\n"
         "  'no seria eso' en espanol informal SIGNIFICA 'si, eso es' -- NO es una correccion.\n"
         "- DATOS PARA EL PEDIDO -- regla absoluta:\n"
         "  * Telefono: SIEMPRE tienes el numero WhatsApp del cliente. NUNCA lo pidas.\n"
@@ -1038,15 +1044,21 @@ async def ejecutar_herramienta(nombre: str, args: dict,
         elif nombre == "escalar_al_admin":
             sesion = _get_sesion(session_id)
             motivo_esc = args.get("motivo", "")
-            # Marcar sesion como amenaza para activar modo silencio
-            if "ALERTA AMENAZA" in motivo_esc or "amenaza" in motivo_esc.lower() or "extorsion" in motivo_esc.lower():
+            # Detectar si es amenaza para activar modo silencio y marcar tipo
+            es_amenaza = (
+                "ALERTA AMENAZA" in motivo_esc
+                or "amenaza" in motivo_esc.lower()
+                or "extorsion" in motivo_esc.lower()
+            )
+            if es_amenaza:
                 sesion["amenaza_detectada"] = True
                 print(f"[Bot] AMENAZA DETECTADA — sesion {session_id} marcada en modo silencio")
             await api.registrar_escalado(
                 wa_id   = wa_id,
                 motivo  = motivo_esc,
                 mensaje = args["mensaje"],
-                nombre  = sesion.get("nombre", "")
+                nombre  = sesion.get("nombre", ""),
+                tipo    = "amenaza" if es_amenaza else "consulta",
             )
             return json.dumps({"ok": True, "escalado": True})
 
@@ -1215,6 +1227,7 @@ async def procesar_mensaje(session_id: str, wa_id: str, texto: str,
         "extorsion", "extorsionar", "extorsionamos", "extorsionando",
         "derecho de piso",
         "cobro ilegal",
+        "vacuna",          # slang chileno de extorsion
         "atentado",
         "quemar el local", "incendiar el local", "quemar tu local", "incendiar tu local",
         "organizacion criminal", "banda criminal",
@@ -1241,6 +1254,7 @@ async def procesar_mensaje(session_id: str, wa_id: str, texto: str,
                 motivo  = "ALERTA AMENAZA: extorsion o intimidacion detectada (pre-filtro Python)",
                 mensaje = f"[{hora_amenaza}] Mensaje recibido: {texto}",
                 nombre  = sesion.get("nombre", ""),
+                tipo    = "amenaza",
             )
         except Exception as e:
             print(f"[Bot] Error al escalar amenaza (pre-filtro): {e}")
