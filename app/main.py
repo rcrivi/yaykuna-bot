@@ -327,6 +327,31 @@ async def send_message(request: Request):
     return {"ok": True}
 
 
+@app.post("/reset-amenaza")
+async def reset_amenaza(request: Request):
+    """Limpia el flag amenaza_detectada de la sesión RAM — llamado por PHP al desbloquear."""
+    body       = await request.json()
+    phone_id   = body.get("phone_id", _SINGLE_PHONE_ID)
+    bot_secret = RESTAURANTES.get(phone_id, {}).get("bot_secret", "")
+    secret_hdr = request.headers.get("X-Bot-Secret", "")
+
+    if bot_secret and secret_hdr != bot_secret:
+        raise HTTPException(status_code=403, detail="Secreto invalido")
+
+    wa_id = body.get("wa_id", "").strip()
+    if not wa_id:
+        raise HTTPException(status_code=400, detail="wa_id requerido")
+
+    cleared = 0
+    for key, sesion in list(_sesiones_bot.items()):
+        if key.endswith(f":{wa_id}") or key == wa_id:
+            sesion.pop("amenaza_detectada", None)
+            cleared += 1
+            print(f"[Bot] DESBLOQUEAR — sesion {key} liberada del modo silencio")
+
+    return {"ok": True, "sesiones_liberadas": cleared}
+
+
 @app.post("/webhook")
 async def recibir_mensaje(request: Request):
     firma   = request.headers.get("X-Hub-Signature-256", "")
