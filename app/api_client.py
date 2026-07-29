@@ -2,6 +2,8 @@
 Cliente HTTP para la API de Reservas PHP.
 Diseñado para multi-restaurante: cada instancia apunta a una API distinta.
 """
+import asyncio
+import time
 import httpx
 from typing import Optional
 
@@ -20,6 +22,8 @@ class ApiClient:
         self._pass   = api_pass
         self._secret = bot_secret
         self._token: Optional[str] = None
+        self._config_cache: dict = {}
+        self._config_cache_ts: float = 0.0
 
     # ── Autenticacion ──────────────────────────────────────────
 
@@ -49,21 +53,55 @@ class ApiClient:
     # ── Endpoints publicos (sin auth) ──────────────────────────
 
     async def get_config_publico(self) -> dict:
-        try:
-            # Usar /config/bot (requiere bot secret) para evitar bloqueo del WAF de Hostinger
-            async with httpx.AsyncClient(timeout=10) as client:
-                r = await client.get(
-                    f"{self._url}/config/bot",
-                    headers=self._bot_headers()
-                )
-                r.raise_for_status()
-                data = r.json()
-                tiene_menu = bool(data.get("menu"))
-                print(f"[ApiClient] config OK — menu={'si ({} chars)'.format(len(data.get('menu',''))) if tiene_menu else 'VACIO'}")
-                return data
-        except Exception as e:
-            print(f"[ApiClient] config ERROR: {e}")
-            raise
+        """Carga la configuración pública del bot.
+
+        Estrategia de resiliencia:
+        - Cache en memoria con TTL de 5 min: evita llamadas innecesarias y protege
+          ante caídas breves de Hostinger.
+        - 2 intentos con 1s de espera: cubre timeouts puntuales de red.
+        - Si ambos intentos fallan pero hay cache (aunque expirado), lo usa como
+          fallback antes de lanzar excepción.
+        """
+        _TTL = 300  # 5 minutos
+        ahora = time.monotonic()
+
+        # Servir desde cache si está fresco
+        if self._config_cache and (ahora - self._config_cache_ts) < _TTL:
+            return self._config_cache
+
+        # 2 intentos con 1s de espera entre ellos
+        ultimo_error: Exception | None = None
+        for intento in range(2):
+            try:
+                async with httpx.AsyncClient(timeout=10) as client:
+                    r = await client.get(
+                        f"{self._url}/config/bot",
+                        headers=self._bot_headers()
+                    )
+                    r.raise_for_status()
+                    data = r.json()
+                    tiene_menu = bool(data.get("menu"))
+                    print(f"[ApiClient] config OK — menu={'si ({} chars)'.format(len(data.get('menu',''))) if tiene_menu else 'VACIO'}")
+                    self._config_cache    = data
+                    self._config_cache_ts = ahora
+                    return data
+            except Exception as e:
+                tipo = type(e).__name__
+                ultimo_error = e
+                if intento == 0:
+                    print(f"[ApiClient] config intento 1 falló ({tipo}: {e}) — reintentando en 1s...")
+                    await asyncio.sleep(1)
+                else:
+                    print(f"[ApiClient] config intento 2 falló ({tipo}: {e})")
+
+        # Ambos intentos fallaron — usar cache aunque esté expirado antes de rendirse
+        if self._config_cache:
+            edad = int(ahora - self._config_cache_ts)
+            print(f"[ApiClient] config usando cache expirado ({edad}s) tras fallo de red")
+            return self._config_cache
+
+        print(f"[ApiClient] config ERROR sin cache disponible ({type(ultimo_error).__name__}: {ultimo_error})")
+        raise ultimo_error
 
     async def get_disponibilidad(self, fecha: str) -> dict:
         async with httpx.AsyncClient(timeout=10) as client:
