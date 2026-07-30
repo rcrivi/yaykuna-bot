@@ -112,6 +112,10 @@ async def _loop_followup():
                     if sesion.get("amenaza_detectada"):
                         continue
 
+                    # No enviar follow-up a sesiones con escalación previa (proveedores, etc.)
+                    if sesion.get("tuvo_escalacion"):
+                        continue
+
                     inactivo_min = (datetime.utcnow() - sesion["updated"]).seconds // 60
 
                     # No enviar follow-up si el cliente se despidio

@@ -39,13 +39,12 @@ def _get_sesion(session_id: str) -> dict:
     _limpiar_sesiones_viejas()
     if session_id not in _sesiones:
         _sesiones[session_id] = {
-            "messages":       [],
-            "nombre":         "",
-            "idioma":         "es",
-            "canal":          "WhatsApp",
-            "updated":        datetime.utcnow(),
-            "escalado_scope":       False,
-            "escalado_scope_count": 0,
+            "messages":        [],
+            "nombre":          "",
+            "idioma":          "es",
+            "canal":           "WhatsApp",
+            "updated":         datetime.utcnow(),
+            "tuvo_escalacion": False,
         }
     return _sesiones[session_id]
 
@@ -514,7 +513,8 @@ def _contexto_dinamico(rest_config: dict, nombre_cliente: str = "",
                         config_pub: dict = None,
                         wa_id: str = "",
                         historial: dict = None,
-                        estado_pedido: dict = None) -> str:
+                        estado_pedido: dict = None,
+                        tuvo_escalacion: bool = False) -> str:
     tz_str = rest_config.get("zona_horaria", "America/Santiago")
     try:
         tz = ZoneInfo(tz_str)
@@ -851,6 +851,20 @@ def _contexto_dinamico(rest_config: dict, nombre_cliente: str = "",
                 f"\n[SISTEMA — ESTADO ACTUAL PEDIDO: pedido #{pid} en estado '{estado_txt}'. "
                 f"Informa al cliente segun corresponda.]\n"
             )
+
+    if tuvo_escalacion:
+        ctx += (
+            "\n---\n"
+            "## SESIÓN CON ESCALACIÓN PREVIA\n"
+            "Un mensaje anterior en esta sesión fue escalado al Administrador del Local.\n"
+            "Para los mensajes de seguimiento aplica estas reglas:\n"
+            "- Consulta legítima (reserva, pedido, carta, horarios, dirección): atiéndela con normalidad.\n"
+            "- Agradecimiento o despedida: responde cordialmente y cierra.\n"
+            "- Comentario informativo ('voy al local', 'dejaré el catálogo'): acusa recibo en una frase breve.\n"
+            "- Continúa con el tema fuera de scope: una sola frase neutral. No elabores ni repitas lo anterior.\n"
+            "- Queja o reclamo legítimo: escala nuevamente con escalar_al_admin.\n"
+            "- NUNCA repitas textualmente una respuesta que ya entregaste en esta conversación.\n"
+        )
 
     return ctx
 
@@ -1264,37 +1278,6 @@ async def procesar_mensaje(session_id: str, wa_id: str, texto: str,
         print(f"[Bot] Sesion {session_id} en modo silencio (amenaza detectada) — mensaje ignorado")
         return ""
 
-    # Sesion ya escalada como fuera de scope: responder brevemente sin llamar al LLM
-    if sesion.get("escalado_scope"):
-        print(f"[Bot] Sesion {session_id} ya escalada como fuera de scope — respuesta corta sin LLM")
-        _txt_scope = texto.lower()
-
-        # Despedidas y agradecimientos → cierre amigable
-        _CIERRE_KW = [
-            "saludos", "hasta luego", "hasta pronto", "nos vemos",
-            "chao", "chau", "adios", "adiós", "bye",
-            "hasta mañana", "hasta manana",
-            "gracias", "muchas gracias", "mil gracias",
-        ]
-        # Comentarios informativos → acuse de recibo
-        _COMENTARIO_KW = [
-            "pasaré", "pasare", "iré", "ire",
-            "voy a ir", "voy al local", "me acerco",
-            "llevaré", "llevare", "dejaré", "dejare",
-            "igual paso", "igual voy",
-        ]
-
-        if any(kw in _txt_scope for kw in _CIERRE_KW):
-            return "¡Gracias por comunicarte! Que tengas un excelente día."
-        elif any(kw in _txt_scope for kw in _COMENTARIO_KW):
-            return "Perfecto, gracias por avisarnos."
-        else:
-            # Anti-repetición: máximo 1 vez "Como te mencioné..."
-            _count = sesion.get("escalado_scope_count", 0)
-            if _count >= 1:
-                return "¡Que tengas un excelente día!"
-            sesion["escalado_scope_count"] = _count + 1
-            return "Como te mencioné, el Administrador del Local va a contactarte a la brevedad."
 
     # Pre-filtro de amenazas: keywords de alta confianza detectados antes de llamar al modelo
     # Garantiza que el mensaje institucional salga EXACTO, sin pasar por la IA
@@ -1512,7 +1495,8 @@ async def procesar_mensaje(session_id: str, wa_id: str, texto: str,
     system_dynamic = system_base + _contexto_dinamico(
         effective_config, nombre_sesion, es_cliente_conocido,
         config_pub, wa_id, historial_cliente,
-        estado_pedido=estado_pedido_actual
+        estado_pedido=estado_pedido_actual,
+        tuvo_escalacion=sesion.get("tuvo_escalacion", False)
     )
 
     # Inyectar datos bancarios siempre que estén configurados
@@ -1604,7 +1588,7 @@ async def procesar_mensaje(session_id: str, wa_id: str, texto: str,
                 else:
                     _saludo = "Buenas noches"
                 texto_scope = f"{_saludo}. Le paso tu mensaje al Administrador del Local — te van a contactar a la brevedad."
-                sesion["escalado_scope"] = True
+                sesion["tuvo_escalacion"] = True
                 sesion["messages"].append({"role": "assistant", "content": texto_scope})
                 return texto_scope
 
