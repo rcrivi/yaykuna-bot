@@ -1522,10 +1522,18 @@ async def procesar_mensaje(session_id: str, wa_id: str, texto: str,
                 "content": response.content
             })
 
+            # Capturar texto que el modelo escribio junto con el tool_use
+            texto_con_tool = "".join(
+                block.text for block in response.content if hasattr(block, "text")
+            ).strip()
+
             tool_results = []
+            _llamo_escalar_scope = False
             for block in response.content:
                 if block.type == "tool_use":
                     print(f"[Bot] tool_use → {block.name} args={str(block.input)[:120]}")
+                    if block.name == "escalar_al_admin":
+                        _llamo_escalar_scope = True
                     resultado = await ejecutar_herramienta(
                         block.name, block.input,
                         session_id, wa_id, effective_config, api,
@@ -1538,6 +1546,31 @@ async def procesar_mensaje(session_id: str, wa_id: str, texto: str,
                     })
 
             sesion["messages"].append({"role": "user", "content": tool_results})
+
+            # Si el modelo llamo escalar_al_admin, manejar la respuesta al cliente:
+            if _llamo_escalar_scope:
+                if texto_con_tool:
+                    # El modelo ya escribio texto junto con el tool — usarlo directamente
+                    sesion["messages"].append({"role": "assistant", "content": texto_con_tool})
+                    return texto_con_tool
+                else:
+                    # El modelo llamo el tool sin texto — generar respuesta de derivacion
+                    tz_str = effective_config.get("zona_horaria", "America/Santiago")
+                    try:
+                        _tz = ZoneInfo(tz_str)
+                    except Exception:
+                        _tz = ZoneInfo("America/Santiago")
+                    _hora = datetime.now(_tz).hour
+                    if 6 <= _hora < 13:
+                        _saludo = "Buenos dias"
+                    elif 13 <= _hora < 20:
+                        _saludo = "Buenas tardes"
+                    else:
+                        _saludo = "Buenas noches"
+                    texto_scope = f"{_saludo}. Eso lo ve el equipo del local — te van a contactar a la brevedad."
+                    sesion["messages"].append({"role": "assistant", "content": texto_scope})
+                    return texto_scope
+
             continue
 
         texto_respuesta = ""
