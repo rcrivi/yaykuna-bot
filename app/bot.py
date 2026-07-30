@@ -1554,29 +1554,24 @@ async def procesar_mensaje(session_id: str, wa_id: str, texto: str,
 
             sesion["messages"].append({"role": "user", "content": tool_results})
 
-            # Si el modelo llamo escalar_al_admin, manejar la respuesta al cliente:
+            # Si el modelo llamo escalar_al_admin, generar siempre respuesta hardcoded.
+            # NO usar el texto del LLM — puede generar saludos incorrectos ("Buenas mañanas", etc.)
             if _llamo_escalar_scope:
-                if texto_con_tool:
-                    # El modelo ya escribio texto junto con el tool — usarlo directamente
-                    sesion["messages"].append({"role": "assistant", "content": texto_con_tool})
-                    return texto_con_tool
+                tz_str = effective_config.get("zona_horaria", "America/Santiago")
+                try:
+                    _tz = ZoneInfo(tz_str)
+                except Exception:
+                    _tz = ZoneInfo("America/Santiago")
+                _hora = datetime.now(_tz).hour
+                if 6 <= _hora < 13:
+                    _saludo = "Buenos días"
+                elif 13 <= _hora < 20:
+                    _saludo = "Buenas tardes"
                 else:
-                    # El modelo llamo el tool sin texto — generar respuesta de derivacion
-                    tz_str = effective_config.get("zona_horaria", "America/Santiago")
-                    try:
-                        _tz = ZoneInfo(tz_str)
-                    except Exception:
-                        _tz = ZoneInfo("America/Santiago")
-                    _hora = datetime.now(_tz).hour
-                    if 6 <= _hora < 13:
-                        _saludo = "Buenos dias"
-                    elif 13 <= _hora < 20:
-                        _saludo = "Buenas tardes"
-                    else:
-                        _saludo = "Buenas noches"
-                    texto_scope = f"{_saludo}. Eso lo ve el equipo del local — te van a contactar a la brevedad."
-                    sesion["messages"].append({"role": "assistant", "content": texto_scope})
-                    return texto_scope
+                    _saludo = "Buenas noches"
+                texto_scope = f"{_saludo}. Le paso tu mensaje al Administrador del Local — te van a contactar a la brevedad."
+                sesion["messages"].append({"role": "assistant", "content": texto_scope})
+                return texto_scope
 
             continue
 
