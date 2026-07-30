@@ -44,7 +44,8 @@ def _get_sesion(session_id: str) -> dict:
             "idioma":         "es",
             "canal":          "WhatsApp",
             "updated":        datetime.utcnow(),
-            "escalado_scope": False,
+            "escalado_scope":       False,
+            "escalado_scope_count": 0,
         }
     return _sesiones[session_id]
 
@@ -1266,7 +1267,34 @@ async def procesar_mensaje(session_id: str, wa_id: str, texto: str,
     # Sesion ya escalada como fuera de scope: responder brevemente sin llamar al LLM
     if sesion.get("escalado_scope"):
         print(f"[Bot] Sesion {session_id} ya escalada como fuera de scope — respuesta corta sin LLM")
-        return "Como te mencioné, el Administrador del Local va a contactarte a la brevedad."
+        _txt_scope = texto.lower()
+
+        # Despedidas y agradecimientos → cierre amigable
+        _CIERRE_KW = [
+            "saludos", "hasta luego", "hasta pronto", "nos vemos",
+            "chao", "chau", "adios", "adiós", "bye",
+            "hasta mañana", "hasta manana",
+            "gracias", "muchas gracias", "mil gracias",
+        ]
+        # Comentarios informativos → acuse de recibo
+        _COMENTARIO_KW = [
+            "pasaré", "pasare", "iré", "ire",
+            "voy a ir", "voy al local", "me acerco",
+            "llevaré", "llevare", "dejaré", "dejare",
+            "igual paso", "igual voy",
+        ]
+
+        if any(kw in _txt_scope for kw in _CIERRE_KW):
+            return "¡Gracias por comunicarte! Que tengas un excelente día."
+        elif any(kw in _txt_scope for kw in _COMENTARIO_KW):
+            return "Perfecto, gracias por avisarnos."
+        else:
+            # Anti-repetición: máximo 1 vez "Como te mencioné..."
+            _count = sesion.get("escalado_scope_count", 0)
+            if _count >= 1:
+                return "¡Que tengas un excelente día!"
+            sesion["escalado_scope_count"] = _count + 1
+            return "Como te mencioné, el Administrador del Local va a contactarte a la brevedad."
 
     # Pre-filtro de amenazas: keywords de alta confianza detectados antes de llamar al modelo
     # Garantiza que el mensaje institucional salga EXACTO, sin pasar por la IA
