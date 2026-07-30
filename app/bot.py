@@ -1227,6 +1227,8 @@ async def procesar_mensaje(session_id: str, wa_id: str, texto: str,
 
     sesion = _get_sesion(session_id)
     sesion["updated"] = datetime.utcnow()
+    if nombre:
+        sesion["nombre"] = nombre
 
     # Modo silencio: sesion marcada por amenaza/extorsion detectada
     if sesion.get("amenaza_detectada"):
