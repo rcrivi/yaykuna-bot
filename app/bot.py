@@ -39,11 +39,12 @@ def _get_sesion(session_id: str) -> dict:
     _limpiar_sesiones_viejas()
     if session_id not in _sesiones:
         _sesiones[session_id] = {
-            "messages": [],
-            "nombre":   "",
-            "idioma":   "es",
-            "canal":    "WhatsApp",
-            "updated":  datetime.utcnow(),
+            "messages":       [],
+            "nombre":         "",
+            "idioma":         "es",
+            "canal":          "WhatsApp",
+            "updated":        datetime.utcnow(),
+            "escalado_scope": False,
         }
     return _sesiones[session_id]
 
@@ -301,10 +302,10 @@ def _build_system_prompt(rest_config: dict) -> str:
         f"- Solicita mas de {rest_config.get('max_personas', 20)} personas\n\n"
         "Al escalar, usa un mensaje natural y distinto cada vez -- nunca la misma frase repetida.\n"
         "Adapta el tono segun la situacion. Ejemplos de como sonar (no copies literal):\n"
-        "  'Eso lo tiene que ver alguien del equipo, ya les aviso para que te contacten!'\n"
-        "  'Te paso con el equipo del local, ellos te pueden ayudar mejor con eso 👌'\n"
-        "  'Eso queda fuera de lo que puedo resolver, pero le aviso a alguien ahora mismo.'\n"
-        "  'Perfecto, deja que le pase tu mensaje al equipo y te responden a la brevedad.'\n\n"
+        "  'Eso lo tiene que ver el Administrador del Local, ya le aviso para que te contacte.'\n"
+        "  'Le paso tu consulta al Administrador del Local — te contacta a la brevedad.'\n"
+        "  'Eso queda fuera de lo que puedo resolver, pero le aviso al Administrador ahora mismo.'\n"
+        "  'Deja que le pase tu mensaje al Administrador del Local y te responde a la brevedad.'\n\n"
         "---\n"
         "## FUERA DE SCOPE\n"
         "Casos: trabajo/empleo, proveedores, eventos privados, reclamos de facturacion,\n"
@@ -329,16 +330,16 @@ def _build_system_prompt(rest_config: dict) -> str:
         "- 'te voy a pasar con el equipo' → implica transferencia en vivo que no existe.\n"
         "- 'eso es un tema de proveedores/empleo' → no etiquetes ni categorices al cliente.\n"
         "- 'directamente contigo' → redundante y crea expectativa de contacto inmediato.\n"
-        "FORMULA CORRECTA: '[Saludo]. [El equipo del local] te [va a contactar / contactara] a la brevedad.'\n"
+        "FORMULA CORRECTA: '[Saludo]. Le paso tu mensaje al Administrador del Local — te [va a contactar / contactara] a la brevedad.'\n"
         "Ejemplos validos (varia, no copies literal):\n"
-        "  'Buenos dias. Le paso tu mensaje al equipo del local — te contactan a la brevedad.'\n"
-        "  'Buenas tardes. Eso lo ve el equipo del restaurante — te escriben pronto.'\n"
-        "  'Buenas noches. El equipo del local se va a poner en contacto contigo a la brevedad.'\n"
+        "  'Buenos dias. Le paso tu mensaje al Administrador del Local — te contactan a la brevedad.'\n"
+        "  'Buenas tardes. Le aviso al Administrador del Local — te escriben pronto.'\n"
+        "  'Buenas noches. El Administrador del Local se va a poner en contacto contigo a la brevedad.'\n"
         "\n"
         "Ejemplos de respuesta correcta (varia, no copies literal):\n"
-        "  'Buenas noches. Eso lo ve el equipo del local — te van a contactar a la brevedad.'\n"
-        "  'Buenas tardes. Esa consulta la maneja directamente el equipo. Te escriben pronto.'\n"
-        "  'Hola. Le paso tu mensaje al equipo del restaurante. Te contactan a la brevedad.'\n\n"
+        "  'Buenas noches. Le paso tu mensaje al Administrador del Local — te van a contactar a la brevedad.'\n"
+        "  'Buenas tardes. El Administrador del Local te escribe pronto.'\n"
+        "  'Buenos dias. Le aviso al Administrador del Local ahora — te contactan a la brevedad.'\n\n"
         "---\n"
         "## MODIFICACIONES, ALERGENOS Y RECOMENDACIONES\n"
         "MODIFICACIONES DE PLATOS ('sin cilantro', 'sin picante', 'extra limon', 'sin cebolla'):\n"
@@ -1262,6 +1263,11 @@ async def procesar_mensaje(session_id: str, wa_id: str, texto: str,
         print(f"[Bot] Sesion {session_id} en modo silencio (amenaza detectada) — mensaje ignorado")
         return ""
 
+    # Sesion ya escalada como fuera de scope: responder brevemente sin llamar al LLM
+    if sesion.get("escalado_scope"):
+        print(f"[Bot] Sesion {session_id} ya escalada como fuera de scope — respuesta corta sin LLM")
+        return "Como te mencioné, el Administrador del Local va a contactarte a la brevedad."
+
     # Pre-filtro de amenazas: keywords de alta confianza detectados antes de llamar al modelo
     # Garantiza que el mensaje institucional salga EXACTO, sin pasar por la IA
     _AMENAZA_KEYWORDS = [
@@ -1570,6 +1576,7 @@ async def procesar_mensaje(session_id: str, wa_id: str, texto: str,
                 else:
                     _saludo = "Buenas noches"
                 texto_scope = f"{_saludo}. Le paso tu mensaje al Administrador del Local — te van a contactar a la brevedad."
+                sesion["escalado_scope"] = True
                 sesion["messages"].append({"role": "assistant", "content": texto_scope})
                 return texto_scope
 
