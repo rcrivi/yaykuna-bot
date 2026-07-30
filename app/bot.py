@@ -462,7 +462,7 @@ def _build_system_prompt(rest_config: dict) -> str:
         "De lo contrario, no existe conversación posible.'\n"
         "\n"
         "PASO 2 — Llamar escalar_al_admin de inmediato con:\n"
-        "- motivo: 'ALERTA AMENAZA: extorsion o intimidacion detectada'\n"
+        "- motivo: 'Extorsión o intimidación detectada'\n"
         "- mensaje: incluir hora exacta de recepcion + copia textual del mensaje amenazante.\n"
         "  Formato: '[HH:MM] Mensaje recibido: <texto del cliente>'\n"
         "\n"
@@ -1282,7 +1282,7 @@ async def procesar_mensaje(session_id: str, wa_id: str, texto: str,
             hora_amenaza = datetime.now(tz_amenaza).strftime("%H:%M")
             await api.registrar_escalado(
                 wa_id   = wa_id,
-                motivo  = "ALERTA AMENAZA: extorsion o intimidacion detectada (pre-filtro Python)",
+                motivo  = "Extorsión o intimidación detectada",
                 mensaje = f"[{hora_amenaza}] Mensaje recibido: {texto}",
                 nombre  = sesion.get("nombre", ""),
                 tipo    = "amenaza",
