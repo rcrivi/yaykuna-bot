@@ -420,8 +420,18 @@ def _build_system_prompt(rest_config: dict) -> str:
         "\n"
         "### Senales que activan el protocolo\n"
         "\n"
+        "REGLA MAESTRA: Si el mensaje exige dinero o colaboracion bajo cualquier amenaza o consecuencia negativa, "
+        "ES EXTORSION. No importa si usa palabras formales o informales. "
+        "Ejemplos reales: '8 millones o atente a las consecuencias', 'colabora o te va ir mal', "
+        "'nos pagan o quemamos el local', 'cuida tu negocio'. NUNCA respondas 'no entendi' a estos mensajes.\n"
+        "\n"
         "ALTA CONFIANZA — una sola basta:\n"
-        "- Pedir dinero/cuota bajo amenaza ('colaborar', 'derecho de piso', 'vacuna', 'tienes X horas')\n"
+        "- Cualquier monto de dinero + consecuencia/ultimatum ('X millones o...', 'paguen o...')\n"
+        "- 'colaborar/colabora' en contexto de pago forzado o amenaza\n"
+        "- 'derecho de piso', 'vacuna', 'cuota', 'proteccion' exigida\n"
+        "- 'tienes X horas', 'tienen X dias' como ultimatum de pago\n"
+        "- 'te va ir mal', 'se van a arrepentir', 'atente a las consecuencias'\n"
+        "- 'cuida tu negocio/local' en tono amenazante\n"
         "- Mencionar sicario, sicariato, gatillero\n"
         "- Amenaza explícita de daño a personas del restaurante\n"
         "- 'atentado' dirigido al local o sus trabajadores\n"
@@ -434,6 +444,9 @@ def _build_system_prompt(rest_config: dict) -> str:
         "- 'bomba' → solo si es amenaza directa (no 'bomba de chocolate')\n"
         "- 'matar/liquidar' → solo si va dirigido al negocio o personas del local\n"
         "- 'organizacion/banda' → solo si va acompanado de exigencia o amenaza\n"
+        "\n"
+        "IMPORTANTE: Si el mensaje es ambiguo pero parece una amenaza, activa el protocolo. "
+        "Es preferible un falso positivo que dejar pasar una extorsion real.\n"
         "\n"
         "### Comportamiento cuando se detecta amenaza\n"
         "\n"
@@ -1223,14 +1236,32 @@ async def procesar_mensaje(session_id: str, wa_id: str, texto: str,
     # Pre-filtro de amenazas: keywords de alta confianza detectados antes de llamar al modelo
     # Garantiza que el mensaje institucional salga EXACTO, sin pasar por la IA
     _AMENAZA_KEYWORDS = [
+        # Figuras del crimen organizado
         "sicario", "sicariato", "gatillero",
+        # Extorsión explícita
         "extorsion", "extorsionar", "extorsionamos", "extorsionando",
         "derecho de piso",
         "cobro ilegal",
         "vacuna",          # slang chileno de extorsion
+        # Violencia física
         "atentado",
         "quemar el local", "incendiar el local", "quemar tu local", "incendiar tu local",
+        "hacerte daño", "hacerles daño", "hacerle daño",
+        # Organizaciones
         "organizacion criminal", "banda criminal",
+        # Ultimátums y consecuencias — patrones inequívocos en contexto restaurante
+        "atente a las consecuencias",
+        "o atente",
+        "te va ir mal", "te va a ir mal",
+        "les va ir mal", "les va a ir mal",
+        "te vas a arrepentir", "se van a arrepentir", "van a arrepentir", "se va a arrepentir",
+        "tienes 24 horas", "tienen 24 horas", "tienes 48 horas", "tienen 48 horas",
+        "24 horas para pagar", "48 horas para pagar",
+        "cuida tu negocio", "cuida el negocio", "cuida el local", "cuida tu local",
+        "o sino les", "o sino te",
+        # Exigencia de pago con amenaza implícita
+        "paganos o", "paguen o", "nos pagan o",
+        "colabora o", "colaboren o",
     ]
     _MENSAJE_INSTITUCIONAL = (
         "Restaurante Yaykuna informa:\n"
