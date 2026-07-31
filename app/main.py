@@ -9,6 +9,7 @@ Maneja:
 import os
 import json
 import asyncio
+import httpx
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Response, HTTPException
 from fastapi.staticfiles import StaticFiles
