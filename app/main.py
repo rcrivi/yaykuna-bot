@@ -61,24 +61,33 @@ _flujo_task: asyncio.Task | None = None
 _GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 
 async def _transcribir_audio(audio_bytes: bytes, mime_type: str) -> str | None:
-    """Transcribe audio usando Groq Whisper. Retorna texto o None si falla."""
+    """Transcribe audio usando Groq Whisper. Convierte OGG→WAV con ffmpeg si es necesario."""
     if not _GROQ_API_KEY:
         print("[Groq] GROQ_API_KEY no configurada")
         return None
-    # Determinar extensión según mime
-    ext = "ogg"
-    if "mp4" in mime_type or "m4a" in mime_type:
-        ext = "m4a"
-    elif "mpeg" in mime_type or "mp3" in mime_type:
-        ext = "mp3"
-    elif "webm" in mime_type:
-        ext = "webm"
+
+    # Limpiar mime (quitar '; codecs=opus' y similares)
+    mime_base = mime_type.split(";")[0].strip()
+
+    # WhatsApp envía OGG/Opus — Groq no lo acepta directamente → convertir a WAV
+    if "ogg" in mime_base or "opus" in mime_base:
+        audio_bytes, mime_base = _convertir_a_wav(audio_bytes) or (audio_bytes, mime_base)
+
+    # Mapear mime → extensión compatible con Groq
+    ext_map = {
+        "audio/wav":  "wav",  "audio/wave": "wav",
+        "audio/mp3":  "mp3",  "audio/mpeg": "mp3",
+        "audio/mp4":  "mp4",  "audio/m4a":  "m4a",
+        "audio/webm": "webm", "audio/flac": "flac",
+    }
+    ext = ext_map.get(mime_base, "wav")
+
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             r = await client.post(
                 "https://api.groq.com/openai/v1/audio/transcriptions",
                 headers={"Authorization": f"Bearer {_GROQ_API_KEY}"},
-                files={"file": (f"audio.{ext}", audio_bytes, mime_type)},
+                files={"file": (f"audio.{ext}", audio_bytes, f"audio/{ext}")},
                 data={"model": "whisper-large-v3-turbo", "language": "es", "response_format": "text"},
             )
             if r.status_code == 200:
@@ -89,6 +98,34 @@ async def _transcribir_audio(audio_bytes: bytes, mime_type: str) -> str | None:
     except Exception as e:
         print(f"[Groq] Excepción al transcribir: {e}")
         return None
+
+
+def _convertir_a_wav(audio_bytes: bytes) -> tuple[bytes, str] | None:
+    """Convierte audio OGG/Opus a WAV usando ffmpeg. Retorna (bytes, mime) o None."""
+    import subprocess, tempfile, os
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as f_in:
+            f_in.write(audio_bytes)
+            f_in_path = f_in.name
+        f_out_path = f_in_path.replace(".ogg", ".wav")
+        result = subprocess.run(
+            ["ffmpeg", "-y", "-i", f_in_path, "-ar", "16000", "-ac", "1", "-f", "wav", f_out_path],
+            capture_output=True, timeout=15
+        )
+        if result.returncode == 0 and os.path.exists(f_out_path):
+            with open(f_out_path, "rb") as f:
+                wav_bytes = f.read()
+            print(f"[Groq] OGG→WAV: {len(audio_bytes)}b → {len(wav_bytes)}b")
+            return wav_bytes, "audio/wav"
+        print(f"[Groq] ffmpeg error: {result.stderr.decode()[:200]}")
+        return None
+    except Exception as e:
+        print(f"[Groq] Conversión ffmpeg fallida: {e}")
+        return None
+    finally:
+        for p in [f_in_path, f_out_path]:
+            try: os.unlink(p)
+            except: pass
 
 
 # ── Buffer de mensajes (debounce por wa_id) ─────────────────
