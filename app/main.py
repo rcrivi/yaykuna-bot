@@ -57,6 +57,40 @@ _procesados: set[str] = set()
 _flujo_configs: dict[str, dict] = {}
 _flujo_task: asyncio.Task | None = None
 
+# ── Transcripción de audio con Groq Whisper ─────────────────
+_GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+
+async def _transcribir_audio(audio_bytes: bytes, mime_type: str) -> str | None:
+    """Transcribe audio usando Groq Whisper. Retorna texto o None si falla."""
+    if not _GROQ_API_KEY:
+        print("[Groq] GROQ_API_KEY no configurada")
+        return None
+    # Determinar extensión según mime
+    ext = "ogg"
+    if "mp4" in mime_type or "m4a" in mime_type:
+        ext = "m4a"
+    elif "mpeg" in mime_type or "mp3" in mime_type:
+        ext = "mp3"
+    elif "webm" in mime_type:
+        ext = "webm"
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.post(
+                "https://api.groq.com/openai/v1/audio/transcriptions",
+                headers={"Authorization": f"Bearer {_GROQ_API_KEY}"},
+                files={"file": (f"audio.{ext}", audio_bytes, mime_type)},
+                data={"model": "whisper-large-v3-turbo", "language": "es", "response_format": "text"},
+            )
+            if r.status_code == 200:
+                transcripcion = r.text.strip()
+                return transcripcion if transcripcion else None
+            print(f"[Groq] Error {r.status_code}: {r.text[:200]}")
+            return None
+    except Exception as e:
+        print(f"[Groq] Excepción al transcribir: {e}")
+        return None
+
+
 # ── Buffer de mensajes (debounce por wa_id) ─────────────────
 _DEBOUNCE_SECS = 10
 _msg_buffer: dict[str, list] = {}
@@ -496,7 +530,7 @@ async def _procesar_en_background(body: dict):
         _procesados.clear()
 
     restaurante_nombre = rest_config.get("nombre", "Restaurante")
-    tipo_log = "imagen" if msg_tipo == "image" else "texto"
+    tipo_log = "imagen" if msg_tipo == "image" else ("audio" if msg_tipo == "audio" else "texto")
     print(f"[Bot] [{restaurante_nombre}] {wa_id} [{tipo_log}]: {texto[:80]}")
 
     try:
@@ -507,7 +541,10 @@ async def _procesar_en_background(body: dict):
     try:
         await marcar_leido(message_id, phone_id=phone_id)
 
-        texto_log = texto if msg_tipo == "text" else (f"[imagen] {texto}".strip() if texto and texto != "[imagen]" else "[imagen: comprobante]")
+        texto_log = (texto if msg_tipo == "text"
+                     else (f"[imagen] {texto}".strip() if texto and texto != "[imagen]" else "[imagen: comprobante]")
+                     if msg_tipo == "image"
+                     else texto)  # audio: se reemplaza abajo si transcripción OK
 
         # Descargar imagen ANTES de registrar, para adjuntarla al mensaje en la BD
         imagen_b64  = None
@@ -521,6 +558,24 @@ async def _procesar_en_background(body: dict):
                 print(f"[Bot] Imagen descargada para {wa_id}: {len(img_bytes)} bytes ({imagen_mime})")
             else:
                 print(f"[Bot] No se pudo descargar imagen de {wa_id}")
+
+        # Transcribir audio con Groq Whisper
+        if msg_tipo == "audio" and media_id:
+            audio_bytes, audio_mime = await descargar_media(media_id)
+            if audio_bytes:
+                transcripcion = await _transcribir_audio(audio_bytes, audio_mime or "audio/ogg")
+                if transcripcion:
+                    texto      = transcripcion
+                    texto_log  = f"[audio] {transcripcion}"
+                    print(f"[Bot] Audio transcripto para {wa_id}: {transcripcion[:80]}")
+                else:
+                    texto     = "[El cliente envió un audio que no pude transcribir]"
+                    texto_log = "[audio: sin transcripción]"
+                    print(f"[Bot] No se pudo transcribir audio de {wa_id}")
+            else:
+                texto     = "[El cliente envió un audio que no pude descargar]"
+                texto_log = "[audio: sin descarga]"
+                print(f"[Bot] No se pudo descargar audio de {wa_id}")
 
         await api.registrar_mensaje(
             wa_id, nombre, "entrante", texto_log,

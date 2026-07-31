@@ -204,8 +204,14 @@ def extraer_mensaje(body: dict):
             texto    = caption or "[imagen]"
             return wa_id, message_id, texto, "image", media_id, mime
 
+        elif msg_type == "audio":
+            audio    = msg.get("audio", {})
+            media_id = audio.get("id")
+            mime     = audio.get("mime_type", "audio/ogg; codecs=opus")
+            return wa_id, message_id, "[audio]", "audio", media_id, mime
+
         else:
-            # Tipo no soportado (audio, video, documento, sticker, etc.)
+            # Tipo no soportado (video, documento, sticker, etc.)
             return None
 
     except (KeyError, IndexError):
