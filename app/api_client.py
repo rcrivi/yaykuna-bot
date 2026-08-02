@@ -62,7 +62,7 @@ class ApiClient:
         - Si ambos intentos fallan pero hay cache (aunque expirado), lo usa como
           fallback antes de lanzar excepción.
         """
-        _TTL = 300  # 5 minutos
+        _TTL = 60  # 1 minuto
         ahora = time.monotonic()
 
         # Servir desde cache si está fresco
