@@ -1128,6 +1128,7 @@ async def ejecutar_herramienta(nombre: str, args: dict,
             _cua = str(effective_config.get("carta_url_activa",     "1")) != "0"
             _cpu = effective_config.get("carta_pdf_url", "")
             _cpua = str(effective_config.get("carta_pdf_url_activa", "1")) != "0"
+            print(f"[Bot] enviar_carta debug: url={_cu!r} activa={_cua} pdf={_cpu!r} pdf_activa={_cpua}")
             if _cu and _cua:
                 botones.append({"texto": "Ver carta digital", "url": _cu})
             if _cpu and _cpua:

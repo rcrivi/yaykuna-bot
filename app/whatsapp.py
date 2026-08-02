@@ -54,6 +54,7 @@ async def enviar_carta_interactiva(to: str, botones: list, phone_id: str = "") -
     botones: [{"texto": "Ver carta digital", "url": "https://..."}, ...]
     """
     pid = phone_id or _DEFAULT_PHONE_ID
+    print(f"[WhatsApp] carta check: pid={pid!r} TOKEN={'ok' if TOKEN else 'VACIO'} botones={len(botones) if botones else 0}")
     if not pid or not TOKEN or not botones:
         return False
     url = _api_url(pid)
