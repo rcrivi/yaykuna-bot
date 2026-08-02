@@ -48,53 +48,41 @@ async def enviar_mensaje(to: str, texto: str, phone_id: str = "") -> bool:
         return False
 
 
-async def enviar_carta_interactiva(to: str, phone_id: str = "") -> bool:
+async def enviar_carta_interactiva(to: str, botones: list, phone_id: str = "") -> bool:
+    """
+    Envía 1 o 2 mensajes interactivos cta_url según los botones configurados.
+    botones: [{"texto": "Ver carta digital", "url": "https://..."}, ...]
+    """
     pid = phone_id or _DEFAULT_PHONE_ID
-    if not pid or not TOKEN:
+    if not pid or not TOKEN or not botones:
         return False
     url = _api_url(pid)
-    headers = {
-        "Authorization": f"Bearer {TOKEN}",
-        "Content-Type":  "application/json"
-    }
-    mensajes = [
-        {
+    headers = {"Authorization": f"Bearer {TOKEN}", "Content-Type": "application/json"}
+
+    payloads = []
+    for i, boton in enumerate(botones):
+        body_text = "Aquí te dejo nuestra carta 😊" if i == 0 else "También disponible para descargar:"
+        payloads.append({
             "messaging_product": "whatsapp",
             "to":   to,
             "type": "interactive",
             "interactive": {
                 "type": "cta_url",
-                "body": {"text": "Aqui tienes nuestra carta completa"},
+                "body": {"text": body_text},
                 "action": {
                     "name": "cta_url",
                     "parameters": {
-                        "display_text": "Ver carta online",
-                        "url": "https://yaykuna.cl/carta.html"
+                        "display_text": boton["texto"],
+                        "url":          boton["url"]
                     }
                 }
             }
-        },
-        {
-            "messaging_product": "whatsapp",
-            "to":   to,
-            "type": "interactive",
-            "interactive": {
-                "type": "cta_url",
-                "body": {"text": "Tambien disponible para descargar:"},
-                "action": {
-                    "name": "cta_url",
-                    "parameters": {
-                        "display_text": "Descargar PDF",
-                        "url": "https://yaykuna.cl/Carta/Cartayaykuna.pdf"
-                    }
-                }
-            }
-        }
-    ]
+        })
+
     try:
         async with httpx.AsyncClient(timeout=15) as client:
-            for msg_payload in mensajes:
-                r = await client.post(url, json=msg_payload, headers=headers)
+            for payload in payloads:
+                r = await client.post(url, json=payload, headers=headers)
                 if r.status_code != 200:
                     print(f"[WhatsApp] Error carta interactiva {r.status_code}: {r.text}")
                     return False

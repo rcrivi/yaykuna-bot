@@ -81,15 +81,23 @@ def _build_system_prompt(rest_config: dict) -> str:
     tel       = rest_config.get("tel",       "")
     ig        = rest_config.get("ig",        "")
     horarios  = rest_config.get("horarios",  "Lunes a Sabado 12:30-23:00 hrs - Domingo 12:30-17:00 hrs")
-    carta_url = rest_config.get("carta_url", "")
-    menu_txt  = rest_config.get("menu", "")
+    carta_url            = rest_config.get("carta_url", "")
+    carta_url_activa     = str(rest_config.get("carta_url_activa",     "1")) != "0"
+    carta_pdf_url        = rest_config.get("carta_pdf_url", "")
+    carta_pdf_url_activa = str(rest_config.get("carta_pdf_url_activa", "1")) != "0"
+    menu_txt             = rest_config.get("menu", "")
 
+    tiene_carta = (carta_url and carta_url_activa) or (carta_pdf_url and carta_pdf_url_activa)
     carta_seccion = ""
-    if carta_url:
+    if tiene_carta:
         carta_seccion = (
-            "\n## CARTA DIGITAL\n"
-            "Cuando el cliente pida la carta o el menu, usa la herramienta `enviar_carta`.\n"
-            f"URL de carta: {carta_url}\n"
+            "\n## CARTA / MENU\n"
+            "Cuando el cliente pida la carta, el menu o los precios (sin especificar un plato),\n"
+            "llama SIEMPRE la herramienta `enviar_carta` -- NUNCA copies URLs en el texto.\n"
+            "La herramienta envia la carta como botones interactivos de WhatsApp.\n"
+            "CRITICO: despues de llamar `enviar_carta`, tu respuesta de texto DEBE ser COMPLETAMENTE VACIA.\n"
+            "Cero texto. Sin 'aqui te dejo', sin emojis, sin nada. Solo el tool call.\n"
+            "Si el cliente pregunta por un plato o precio especifico, busca en CARTA y responde directo sin llamar enviar_carta.\n"
         )
 
     menu_seccion = (
@@ -120,8 +128,8 @@ def _build_system_prompt(rest_config: dict) -> str:
         "## PERSONALIDAD Y FORMA DE HABLAR\n"
         "- Habla de tu, nunca de usted. Tono cercano, caloroso y educado, como un anfitrion real del local.\n"
         "- IDIOMA: Usa espanol neutro y correcto. NUNCA uses voseo ni expresiones rioplatenses.\n"
-        "  Palabras PROHIBIDAS: 'querés', 'podés', 'avisás', 'pasá', 'pagás', 'dale', 'che', 'boludo'.\n"
-        "  Usa SIEMPRE: 'quieres', 'puedes', 'pasa a retirar', 'pagas en caja', 'claro que si'.\n"
+        "  Palabras PROHIBIDAS: 'vos', 'querés', 'podés', 'avisás', 'pasá', 'pagás', 'dale', 'che', 'boludo', 'tenes', 'tenés'.\n"
+        "  Pronombre SIEMPRE: 'tú' (nunca 'vos'). Verbos SIEMPRE: 'quieres', 'puedes', 'tienes', 'pasa a retirar', 'pagas en caja', 'claro que si'.\n"
         "- Responde como lo haria una persona: breve cuando el cliente es breve, mas completo cuando lo necesita.\n"
         "- NUNCA abras la conversacion listando opciones o capacidades numeradas. Espera que el cliente diga que necesita.\n"
         "- SALUDO DE APERTURA: usalo SOLO si es el primer mensaje de la sesion (historial vacio).\n"
@@ -1089,13 +1097,31 @@ async def ejecutar_herramienta(nombre: str, args: dict,
             return json.dumps(data, ensure_ascii=False)
 
         elif nombre == "enviar_carta":
-            carta_url = rest_config.get("carta_url", "")
-            if carta_url:
-                from .whatsapp import enviar_carta_interactiva
-                ok = await enviar_carta_interactiva(wa_id, carta_url=carta_url)
+            botones = []
+            _cu  = rest_config.get("carta_url", "")
+            _cua = str(rest_config.get("carta_url_activa",     "1")) != "0"
+            _cpu = rest_config.get("carta_pdf_url", "")
+            _cpua = str(rest_config.get("carta_pdf_url_activa", "1")) != "0"
+            if _cu and _cua:
+                botones.append({"texto": "Ver carta digital", "url": _cu})
+            if _cpu and _cpua:
+                botones.append({"texto": "Descargar PDF", "url": _cpu})
+
+            if botones:
+                from .whatsapp import enviar_carta_interactiva as _enviar_carta
+                _phone_id = session_id.split(":")[0] if ":" in session_id else ""
+                ok = await _enviar_carta(wa_id, botones, _phone_id)
+                if ok:
+                    _get_sesion(session_id)["carta_enviada"] = True
+                    return json.dumps({
+                        "ok": True,
+                        "instruccion": "Carta enviada exitosamente. Tu respuesta de texto ahora DEBE ser COMPLETAMENTE VACIA. Silencio total."
+                    }, ensure_ascii=False)
+                else:
+                    links = " | ".join(b["url"] for b in botones)
+                    return json.dumps({"ok": False, "fallback": f"Error al enviar botones. Links: {links}"}, ensure_ascii=False)
             else:
-                ok = False
-            return json.dumps({"ok": ok})
+                return json.dumps({"ok": False, "mensaje": "No hay carta configurada actualmente."}, ensure_ascii=False)
 
         elif nombre == "escalar_al_admin":
             sesion = _get_sesion(session_id)
@@ -1252,8 +1278,12 @@ async def ejecutar_herramienta(nombre: str, args: dict,
 async def procesar_mensaje(session_id: str, wa_id: str, texto: str,
                             nombre: str, rest_config: dict,
                             api: ApiClient,
+                            imagenes: list = None,
                             imagen_b64: str = None,
                             imagen_mime: str = "image/jpeg") -> str:
+    # Backward-compat: convertir imagen_b64 antigua a lista
+    if imagen_b64 and not imagenes:
+        imagenes = [{"b64": imagen_b64, "mime": imagen_mime or "image/jpeg"}]
     config_pub = {}
     try:
         config_pub = await api.get_config_publico()
@@ -1373,80 +1403,93 @@ async def procesar_mensaje(session_id: str, wa_id: str, texto: str,
         # Nombre de WhatsApp es emoji, número o vacío — usar lo que haya en sesión (o DB)
         nombre_sesion = sesion.get("nombre", "")
 
-    # Construir contenido del mensaje (texto simple o imagen + texto)
-    if imagen_b64:
-        # Pre-buscar el pedido del cliente para inyectarlo como contexto.
-        # El bot ya tiene el dato y no necesita decidir si llamar un tool.
-        pedido_ctx_txt = ""
-        try:
-            pedido_ctx  = await api.buscar_pedido_pendiente(wa_id)
-            situacion   = pedido_ctx.get("situacion", "error")
-            p           = pedido_ctx.get("pedido")
-
-            if situacion == "pendiente" and p:
-                total = p.get('total', '?')
-                pedido_ctx_txt = (
-                    f"\n[SISTEMA — pedido encontrado automaticamente: "
-                    f"pedido_id={p['id']}, TOTAL_PEDIDO=${total}, estado=pendiente_de_pago. "
-                    f"INSTRUCCION: compara el monto del comprobante con TOTAL_PEDIDO=${total}. "
-                    f"Si el monto coincide o es mayor Y el destinatario es correcto, "
-                    f"llama marcar_transferencia_ok con pedido_id={p['id']} SIN preguntar nada al cliente. "
-                    f"Si el monto es menor, informa la diferencia al cliente.]"
-                )
-            elif situacion == "ya_pagado" and p:
-                pedido_ctx_txt = (
-                    f"\n[SISTEMA — ATENCION: el pedido #{p['id']} ya tiene el pago registrado "
-                    f"(transferencia_ok=1, monto=${p.get('transferencia_monto', p.get('total','?'))}). "
-                    f"NO llames marcar_transferencia_ok. "
-                    f"Informa al cliente que su comprobante ya fue recibido anteriormente y el pedido esta confirmado.]"
-                )
-            elif situacion == "cancelado" and p:
-                pedido_ctx_txt = (
-                    f"\n[SISTEMA — el pedido mas reciente #{p['id']} esta CANCELADO. "
-                    f"Informa al cliente que ese pedido fue cancelado y que si quiere hacer un nuevo pedido con gusto lo ayudas. "
-                    f"NO registres el comprobante.]"
-                )
-            elif situacion == "otro_estado" and p:
-                pedido_ctx_txt = (
-                    f"\n[SISTEMA — el pedido #{p['id']} esta en estado '{p.get('estado','')}' "
-                    f"(ya procesado, no requiere pago por transferencia). "
-                    f"Informa al cliente el estado actual y que si tiene dudas puede consultar al equipo.]"
-                )
-            elif situacion == "sin_pedidos":
-                pedido_ctx_txt = (
-                    "\n[SISTEMA — este cliente no tiene pedidos registrados. "
-                    "Si el comprobante parece valido, pregunta al cliente el numero de pedido (#NN).]"
-                )
-            else:
-                pedido_ctx_txt = (
-                    "\n[SISTEMA — no se pudo obtener informacion del pedido. "
-                    "Si el comprobante es valido, pregunta al cliente el numero de pedido.]"
-                )
-        except Exception:
-            pass
-
+    # Construir contenido del mensaje (texto simple o una/varias imágenes + texto)
+    if imagenes:
+        n = len(imagenes)
         texto_base = texto if texto and texto != "[imagen]" else ""
-        texto_final = (
-            (texto_base + " — " if texto_base else "")
-            + "El cliente acaba de enviar esta imagen (posible comprobante de transferencia). "
-            + "Analízala y actua segun las instrucciones de COMPROBANTES DE TRANSFERENCIA."
-            + pedido_ctx_txt
-        )
 
+        if n == 1:
+            # Una sola imagen → puede ser comprobante de transferencia
+            # Pre-buscar pedido pendiente para dar contexto al bot
+            pedido_ctx_txt = ""
+            try:
+                pedido_ctx = await api.buscar_pedido_pendiente(wa_id)
+                situacion  = pedido_ctx.get("situacion", "error")
+                p          = pedido_ctx.get("pedido")
+
+                if situacion == "pendiente" and p:
+                    total = p.get('total', '?')
+                    pedido_ctx_txt = (
+                        f"\n[SISTEMA — pedido encontrado automaticamente: "
+                        f"pedido_id={p['id']}, TOTAL_PEDIDO=${total}, estado=pendiente_de_pago. "
+                        f"INSTRUCCION: compara el monto del comprobante con TOTAL_PEDIDO=${total}. "
+                        f"Si el monto coincide o es mayor Y el destinatario es correcto, "
+                        f"llama marcar_transferencia_ok con pedido_id={p['id']} SIN preguntar nada al cliente. "
+                        f"Si el monto es menor, informa la diferencia al cliente.]"
+                    )
+                elif situacion == "ya_pagado" and p:
+                    pedido_ctx_txt = (
+                        f"\n[SISTEMA — ATENCION: el pedido #{p['id']} ya tiene el pago registrado "
+                        f"(transferencia_ok=1, monto=${p.get('transferencia_monto', p.get('total','?'))}). "
+                        f"NO llames marcar_transferencia_ok. "
+                        f"Informa al cliente que su comprobante ya fue recibido anteriormente y el pedido esta confirmado.]"
+                    )
+                elif situacion == "cancelado" and p:
+                    pedido_ctx_txt = (
+                        f"\n[SISTEMA — el pedido mas reciente #{p['id']} esta CANCELADO. "
+                        f"Informa al cliente que ese pedido fue cancelado y que si quiere hacer un nuevo pedido con gusto lo ayudas. "
+                        f"NO registres el comprobante.]"
+                    )
+                elif situacion == "otro_estado" and p:
+                    pedido_ctx_txt = (
+                        f"\n[SISTEMA — el pedido #{p['id']} esta en estado '{p.get('estado','')}' "
+                        f"(ya procesado, no requiere pago por transferencia). "
+                        f"Informa al cliente el estado actual y que si tiene dudas puede consultar al equipo.]"
+                    )
+                elif situacion == "sin_pedidos":
+                    pedido_ctx_txt = (
+                        "\n[SISTEMA — este cliente no tiene pedidos registrados. "
+                        "Si el comprobante parece valido, pregunta al cliente el numero de pedido (#NN).]"
+                    )
+                else:
+                    pedido_ctx_txt = (
+                        "\n[SISTEMA — no se pudo obtener informacion del pedido. "
+                        "Si el comprobante es valido, pregunta al cliente el numero de pedido.]"
+                    )
+            except Exception:
+                pass
+
+            texto_final = (
+                (texto_base + " — " if texto_base else "")
+                + "El cliente acaba de enviar esta imagen (posible comprobante de transferencia). "
+                + "Analízala y actua segun las instrucciones de COMPROBANTES DE TRANSFERENCIA."
+                + pedido_ctx_txt
+            )
+        else:
+            # Múltiples imágenes → casi siempre son platos del menú que quiere pedir
+            texto_final = (
+                (texto_base + "\n" if texto_base else "")
+                + f"El cliente envió {n} imágenes de platos. "
+                + "Identifica cada plato por su nombre y precio tal como aparece en la imagen. "
+                + "Anota todos los platos en el pedido y confirma el total al cliente en un solo mensaje. "
+                + "Si alguna imagen no corresponde a un plato del menú sino a un comprobante de pago, "
+                + "actúa según las instrucciones de COMPROBANTES DE TRANSFERENCIA para esa imagen."
+            )
+            print(f"[Bot] Multi-imagen ({n}) de {wa_id} → modo pedido de menú")
+
+        # Armar content con TODAS las imágenes + texto al final
         user_content = [
             {
                 "type": "image",
                 "source": {
                     "type":       "base64",
-                    "media_type": imagen_mime,
-                    "data":       imagen_b64,
+                    "media_type": img["mime"],
+                    "data":       img["b64"],
                 }
-            },
-            {
-                "type": "text",
-                "text": texto_final,
             }
+            for img in imagenes
         ]
+        user_content.append({"type": "text", "text": texto_final})
     else:
         user_content = texto
 
@@ -1635,6 +1678,10 @@ async def procesar_mensaje(session_id: str, wa_id: str, texto: str,
 
         texto_final = texto_respuesta.strip()
         if not texto_final:
+            # Si la carta fue enviada como mensaje interactivo, no enviar texto adicional
+            if sesion.get("carta_enviada"):
+                sesion.pop("carta_enviada", None)
+                return None
             texto_final = "Disculpa, tuve un problema procesando tu mensaje. Puedes intentarlo de nuevo."
         return texto_final
 
