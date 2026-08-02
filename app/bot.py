@@ -1124,10 +1124,10 @@ async def ejecutar_herramienta(nombre: str, args: dict,
 
         elif nombre == "enviar_carta":
             botones = []
-            _cu  = rest_config.get("carta_url", "")
-            _cua = str(rest_config.get("carta_url_activa",     "1")) != "0"
-            _cpu = rest_config.get("carta_pdf_url", "")
-            _cpua = str(rest_config.get("carta_pdf_url_activa", "1")) != "0"
+            _cu  = effective_config.get("carta_url", "")
+            _cua = str(effective_config.get("carta_url_activa",     "1")) != "0"
+            _cpu = effective_config.get("carta_pdf_url", "")
+            _cpua = str(effective_config.get("carta_pdf_url_activa", "1")) != "0"
             if _cu and _cua:
                 botones.append({"texto": "Ver carta digital", "url": _cu})
             if _cpu and _cpua:
@@ -1150,11 +1150,11 @@ async def ejecutar_herramienta(nombre: str, args: dict,
                 return json.dumps({"ok": False, "mensaje": "No hay carta configurada actualmente."}, ensure_ascii=False)
 
         elif nombre == "enviar_ubicacion":
-            _lat  = rest_config.get("ubicacion_lat", "")
-            _lng  = rest_config.get("ubicacion_lng", "")
-            _nom  = rest_config.get("ubicacion_nombre", rest_config.get("nombre", "Restaurante"))
-            _dir  = rest_config.get("ubicacion_direccion", "")
-            _acti = str(rest_config.get("ubicacion_activa", "0")) != "0"
+            _lat  = effective_config.get("ubicacion_lat", "")
+            _lng  = effective_config.get("ubicacion_lng", "")
+            _nom  = effective_config.get("ubicacion_nombre", effective_config.get("nombre", "Restaurante"))
+            _dir  = effective_config.get("ubicacion_direccion", "")
+            _acti = str(effective_config.get("ubicacion_activa", "0")) != "0"
             if _lat and _lng and _acti:
                 from .whatsapp import enviar_ubicacion as _enviar_ubi
                 _phone_id = session_id.split(":")[0] if ":" in session_id else ""
