@@ -92,6 +92,77 @@ async def enviar_carta_interactiva(to: str, botones: list, phone_id: str = "") -
         return False
 
 
+async def enviar_ubicacion(to: str, lat: float, lng: float,
+                           nombre: str, direccion: str,
+                           phone_id: str = "") -> bool:
+    """
+    Envía pin de ubicación + 2 botones cta_url (Waze y Google Maps).
+    """
+    pid = phone_id or _DEFAULT_PHONE_ID
+    if not pid or not TOKEN:
+        return False
+    url = _api_url(pid)
+    headers = {"Authorization": f"Bearer {TOKEN}", "Content-Type": "application/json"}
+
+    waze_url = f"https://waze.com/ul?ll={lat},{lng}&navigate=yes"
+    maps_url = f"https://maps.google.com/?q={lat},{lng}"
+
+    payloads = [
+        # 1. Pin de ubicación
+        {
+            "messaging_product": "whatsapp",
+            "to":   to,
+            "type": "location",
+            "location": {
+                "latitude":  lat,
+                "longitude": lng,
+                "name":      nombre,
+                "address":   direccion
+            }
+        },
+        # 2. Botón Waze
+        {
+            "messaging_product": "whatsapp",
+            "to":   to,
+            "type": "interactive",
+            "interactive": {
+                "type": "cta_url",
+                "body": {"text": "Navega hasta nosotros con tu app favorita 🗺️"},
+                "action": {
+                    "name": "cta_url",
+                    "parameters": {"display_text": "Abrir en Waze", "url": waze_url}
+                }
+            }
+        },
+        # 3. Botón Google Maps
+        {
+            "messaging_product": "whatsapp",
+            "to":   to,
+            "type": "interactive",
+            "interactive": {
+                "type": "cta_url",
+                "body": {"text": "O si prefieres Google Maps:"},
+                "action": {
+                    "name": "cta_url",
+                    "parameters": {"display_text": "Abrir en Google Maps", "url": maps_url}
+                }
+            }
+        },
+    ]
+
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            for payload in payloads:
+                r = await client.post(url, json=payload, headers=headers)
+                if r.status_code != 200:
+                    print(f"[WhatsApp] Error ubicacion {r.status_code}: {r.text}")
+                    return False
+        return True
+    except Exception as e:
+        print(f"[WhatsApp] Excepcion enviando ubicacion: {e}")
+        return False
+
+
 async def marcar_leido(message_id: str, phone_id: str = "") -> None:
     pid = phone_id or _DEFAULT_PHONE_ID
     if not pid or not TOKEN:

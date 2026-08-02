@@ -87,6 +87,22 @@ def _build_system_prompt(rest_config: dict) -> str:
     carta_pdf_url_activa = str(rest_config.get("carta_pdf_url_activa", "1")) != "0"
     menu_txt             = rest_config.get("menu", "")
 
+    # — Ubicación —
+    ubi_lat     = rest_config.get("ubicacion_lat", "")
+    ubi_lng     = rest_config.get("ubicacion_lng", "")
+    ubi_activa  = str(rest_config.get("ubicacion_activa", "0")) != "0"
+    tiene_ubicacion = bool(ubi_lat and ubi_lng and ubi_activa)
+    ubicacion_seccion = ""
+    if tiene_ubicacion:
+        ubicacion_seccion = (
+            "\n## UBICACION / COMO LLEGAR\n"
+            "Cuando el cliente pregunte por la direccion, como llegar, donde quedan, o similar,\n"
+            "llama SIEMPRE la herramienta `enviar_ubicacion` -- NUNCA escribas coordenadas ni URLs.\n"
+            "La herramienta envia el pin de ubicacion + botones de Waze y Google Maps automaticamente.\n"
+            "CRITICO: despues de llamar `enviar_ubicacion`, tu respuesta de texto DEBE ser COMPLETAMENTE VACIA.\n"
+            "Cero texto. Solo el tool call.\n"
+        )
+
     tiene_carta = (carta_url and carta_url_activa) or (carta_pdf_url and carta_pdf_url_activa)
     carta_seccion = ""
     if tiene_carta:
@@ -159,7 +175,8 @@ def _build_system_prompt(rest_config: dict) -> str:
         "  y llama verificar_disponibilidad para la fecha que el indique.\n\n"
         "---\n"
         + menu_seccion
-        + carta_seccion +
+        + carta_seccion
+        + ubicacion_seccion +
         "---\n"
         "## CONOCIMIENTO CULINARIO\n"
         "Cuando el cliente pregunte sobre temperatura, frescura o tiempos de espera, responde\n"
@@ -983,6 +1000,15 @@ TOOLS = [
         }
     },
     {
+        "name": "enviar_ubicacion",
+        "description": "Envia el pin de ubicacion del restaurante con botones de Waze y Google Maps. Usar cuando el cliente pregunte por la direccion, como llegar, donde quedan, o similar.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
+    },
+    {
         "name": "marcar_transferencia_ok",
         "description": "Registra que el comprobante de transferencia de un pedido fue verificado visualmente. Llamar SOLO cuando hayas analizado la imagen y el comprobante sea válido (monto y destinatario correctos).",
         "input_schema": {
@@ -1122,6 +1148,27 @@ async def ejecutar_herramienta(nombre: str, args: dict,
                     return json.dumps({"ok": False, "fallback": f"Error al enviar botones. Links: {links}"}, ensure_ascii=False)
             else:
                 return json.dumps({"ok": False, "mensaje": "No hay carta configurada actualmente."}, ensure_ascii=False)
+
+        elif nombre == "enviar_ubicacion":
+            _lat  = rest_config.get("ubicacion_lat", "")
+            _lng  = rest_config.get("ubicacion_lng", "")
+            _nom  = rest_config.get("ubicacion_nombre", rest_config.get("nombre", "Restaurante"))
+            _dir  = rest_config.get("ubicacion_direccion", "")
+            _acti = str(rest_config.get("ubicacion_activa", "0")) != "0"
+            if _lat and _lng and _acti:
+                from .whatsapp import enviar_ubicacion as _enviar_ubi
+                _phone_id = session_id.split(":")[0] if ":" in session_id else ""
+                ok = await _enviar_ubi(wa_id, float(_lat), float(_lng), _nom, _dir, _phone_id)
+                if ok:
+                    _get_sesion(session_id)["carta_enviada"] = True  # reusa flag para silencio
+                    return json.dumps({
+                        "ok": True,
+                        "instruccion": "Ubicacion enviada. Tu respuesta de texto DEBE ser COMPLETAMENTE VACIA. Silencio total."
+                    }, ensure_ascii=False)
+                else:
+                    return json.dumps({"ok": False, "fallback": f"Error enviando ubicacion. La direccion es: {_dir}"}, ensure_ascii=False)
+            else:
+                return json.dumps({"ok": False, "mensaje": "No hay ubicacion configurada."}, ensure_ascii=False)
 
         elif nombre == "escalar_al_admin":
             sesion = _get_sesion(session_id)
@@ -1508,8 +1555,10 @@ async def procesar_mensaje(session_id: str, wa_id: str, texto: str,
         effective_config["tipo_servicio"] = config_pub["tipo_servicio"]
     if config_pub.get("tiempo_preparacion"):
         effective_config["tiempo_preparacion"] = int(config_pub["tiempo_preparacion"])
-    # Campos carta siempre se toman desde la DB (pueden cambiar desde el panel)
-    for _k in ("carta_pdf_url", "carta_url_activa", "carta_pdf_url_activa"):
+    # Campos carta y ubicacion siempre se toman desde la DB (pueden cambiar desde el panel)
+    for _k in ("carta_pdf_url", "carta_url_activa", "carta_pdf_url_activa",
+               "ubicacion_lat", "ubicacion_lng", "ubicacion_nombre",
+               "ubicacion_direccion", "ubicacion_activa"):
         if _k in config_pub:
             effective_config[_k] = config_pub[_k]
 
