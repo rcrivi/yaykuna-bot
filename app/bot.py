@@ -1508,6 +1508,10 @@ async def procesar_mensaje(session_id: str, wa_id: str, texto: str,
         effective_config["tipo_servicio"] = config_pub["tipo_servicio"]
     if config_pub.get("tiempo_preparacion"):
         effective_config["tiempo_preparacion"] = int(config_pub["tiempo_preparacion"])
+    # Campos carta siempre se toman desde la DB (pueden cambiar desde el panel)
+    for _k in ("carta_pdf_url", "carta_url_activa", "carta_pdf_url_activa"):
+        if _k in config_pub:
+            effective_config[_k] = config_pub[_k]
 
     # Historial del cliente para reconocimiento cross-sesion
     historial_cliente = {}
