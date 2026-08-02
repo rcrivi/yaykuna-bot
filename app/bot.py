@@ -1320,6 +1320,7 @@ async def ejecutar_herramienta(nombre: str, args: dict,
             return json.dumps({"error": f"Herramienta '{nombre}' no reconocida"})
 
     except Exception as e:
+        print(f"[Bot] ejecutar_herramienta ERROR ({nombre}): {type(e).__name__}: {e}")
         return json.dumps({"error": str(e)})
 
 
