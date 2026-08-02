@@ -403,6 +403,35 @@ async def send_message(request: Request):
     return {"ok": True}
 
 
+@app.post("/send-media")
+async def send_media(request: Request):
+    """Envía imagen/documento/video/audio al cliente vía URL pública. Llamado por PHP."""
+    body       = await request.json()
+    phone_id   = body.get("phone_id", _SINGLE_PHONE_ID)
+    bot_secret = RESTAURANTES.get(phone_id, {}).get("bot_secret", "")
+    secret_hdr = request.headers.get("X-Bot-Secret", "")
+
+    if bot_secret and secret_hdr != bot_secret:
+        raise HTTPException(status_code=403, detail="Secreto invalido")
+
+    wa_id    = body.get("wa_id", "").strip()
+    tipo     = body.get("tipo", "image").strip()   # image | document | video | audio
+    url      = body.get("url", "").strip()
+    filename = body.get("filename", "").strip()
+    caption  = body.get("caption", "").strip()
+
+    if not wa_id or not url:
+        raise HTTPException(status_code=400, detail="wa_id y url son requeridos")
+    if tipo not in ("image", "document", "video", "audio"):
+        raise HTTPException(status_code=400, detail="tipo invalido")
+
+    from .whatsapp import enviar_media_link
+    ok = await enviar_media_link(wa_id, tipo, url, filename, caption, phone_id=phone_id)
+    if not ok:
+        raise HTTPException(status_code=502, detail="Error enviando media")
+    return {"ok": True}
+
+
 @app.post("/reset-amenaza")
 async def reset_amenaza(request: Request):
     """Limpia el flag amenaza_detectada de la sesión RAM — llamado por PHP al desbloquear."""
@@ -478,22 +507,21 @@ async def _debounce_y_responder(session_key: str, phone_id: str,
                       if m.get("texto") and m["texto"] not in ("", "[imagen]", "[imagen: comprobante]")]
             texto_combinado = "\n".join(textos) if textos else ""
 
-            # Usar la última imagen disponible
-            imagen_b64  = None
-            imagen_mime = "image/jpeg"
-            for m in reversed(msgs):
-                if m.get("imagen_b64"):
-                    imagen_b64  = m["imagen_b64"]
-                    imagen_mime = m.get("imagen_mime", "image/jpeg")
-                    if not texto_combinado:
-                        texto_combinado = "[imagen]"
-                    break
+            # Recolectar TODAS las imágenes del buffer en orden de llegada
+            imagenes = [
+                {"b64": m["imagen_b64"], "mime": m.get("imagen_mime", "image/jpeg")}
+                for m in msgs if m.get("imagen_b64")
+            ]
+            if imagenes and not texto_combinado:
+                texto_combinado = "[imagen]"
 
-            if not texto_combinado and not imagen_b64:
+            if not texto_combinado and not imagenes:
                 break
 
             if len(msgs) > 1:
-                print(f"[Bot] Buffer: {len(msgs)} msgs de {wa_id} combinados → '{texto_combinado[:80]}'")
+                n_imgs = len(imagenes)
+                img_info = f", {n_imgs} imagen(es)" if n_imgs else ""
+                print(f"[Bot] Buffer: {len(msgs)} msgs de {wa_id} combinados → '{texto_combinado[:80]}'{img_info}")
 
             try:
                 respuesta = await procesar_mensaje(
@@ -503,8 +531,7 @@ async def _debounce_y_responder(session_key: str, phone_id: str,
                     nombre      = nombre,
                     rest_config = rest_config,
                     api         = api,
-                    imagen_b64  = imagen_b64,
-                    imagen_mime = imagen_mime,
+                    imagenes    = imagenes or None,
                 )
                 if not respuesta:
                     print(f"[Bot] Modo silencio activo para {wa_id} — respuesta ignorada")

@@ -163,6 +163,43 @@ async def enviar_ubicacion(to: str, lat: float, lng: float,
         return False
 
 
+async def enviar_media_link(to: str, tipo: str, url: str,
+                            filename: str = "", caption: str = "",
+                            phone_id: str = "") -> bool:
+    """
+    Envía imagen / documento / video / audio vía URL pública.
+    tipo: 'image' | 'document' | 'video' | 'audio'
+    """
+    pid = phone_id or _DEFAULT_PHONE_ID
+    if not pid or not TOKEN:
+        return False
+
+    media: dict = {"link": url}
+    if caption:
+        media["caption"] = caption
+    if tipo == "document" and filename:
+        media["filename"] = filename
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "recipient_type":    "individual",
+        "to":   to,
+        "type": tipo,
+        tipo:   media,
+    }
+    headers = {"Authorization": f"Bearer {TOKEN}", "Content-Type": "application/json"}
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.post(_api_url(pid), json=payload, headers=headers)
+            if r.status_code != 200:
+                print(f"[WhatsApp] Error media_link {r.status_code}: {r.text}")
+                return False
+        return True
+    except Exception as e:
+        print(f"[WhatsApp] Excepcion enviando media_link: {e}")
+        return False
+
+
 async def marcar_leido(message_id: str, phone_id: str = "") -> None:
     pid = phone_id or _DEFAULT_PHONE_ID
     if not pid or not TOKEN:
