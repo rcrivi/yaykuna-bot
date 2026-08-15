@@ -358,6 +358,20 @@ class ApiClient:
         except Exception as e:
             return {"error": str(e)}
 
+    async def modificar_notas_pedido(self, pedido_id: int, notas: str) -> dict:
+        """Actualiza las notas de un pedido (hora de retiro, instrucciones especiales)."""
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                r = await client.put(
+                    f"{self._url}/pedidos/{pedido_id}/notas",
+                    json={"notas": notas},
+                    headers=self._bot_headers()
+                )
+                r.raise_for_status()
+                return r.json()
+        except Exception as e:
+            return {"error": str(e)}
+
     async def agregar_items_pedido(self, pedido_id: int, items: list) -> dict:
         """Agrega items a un pedido existente (cualquier estado). Fusiona con los items actuales."""
         try:

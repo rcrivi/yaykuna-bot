@@ -58,6 +58,15 @@ _procesados: set[str] = set()
 _flujo_configs: dict[str, dict] = {}
 _flujo_task: asyncio.Task | None = None
 
+# ── Lock por sesion: evita procesar dos mensajes del mismo wa_id en paralelo ──
+_wa_locks: dict[str, asyncio.Lock] = {}
+
+def _get_wa_lock(session_key: str) -> asyncio.Lock:
+    """Retorna (creando si es necesario) el Lock asyncio para un session_key."""
+    if session_key not in _wa_locks:
+        _wa_locks[session_key] = asyncio.Lock()
+    return _wa_locks[session_key]
+
 # ── Transcripción de audio con Groq Whisper ─────────────────
 _GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 
@@ -133,7 +142,6 @@ def _convertir_a_wav(audio_bytes: bytes) -> tuple[bytes, str] | None:
 _DEBOUNCE_SECS = 10
 _msg_buffer: dict[str, list] = {}
 _msg_timers: dict[str, asyncio.Task] = {}
-_processing: set[str] = set()  # sesiones con respuesta en curso — evita dobles respuestas
 
 
 async def _loop_followup():
@@ -480,85 +488,69 @@ _INTENTO_TRANSACCIONAL = [
 async def _debounce_y_responder(session_key: str, phone_id: str,
                                  rest_config: dict, api: "ApiClient"):
     """Espera DEBOUNCE_SECS y luego procesa todos los mensajes acumulados juntos.
-    Si la sesión ya está siendo procesada, descarta — el procesador activo recogerá
-    los mensajes pendientes al terminar su ciclo."""
+    Usa un Lock por sesion: si ya hay un procesamiento en curso, espera que termine
+    antes de procesar — evita dobles respuestas sin descartar mensajes."""
     await asyncio.sleep(_DEBOUNCE_SECS)
 
-    # Si ya hay un procesamiento en curso para esta sesión, salir —
-    # el ciclo activo recogerá los mensajes del buffer al terminar
-    if session_key in _processing:
-        print(f"[Bot] Debounce de {session_key} descartado — ya hay procesamiento activo")
-        return
+    async with _get_wa_lock(session_key):
+        msgs = _msg_buffer.pop(session_key, [])
+        _msg_timers.pop(session_key, None)
+        if not msgs:
+            return
 
-    _processing.add(session_key)
-    try:
-        # Loop: procesar tandas hasta vaciar el buffer (cubre mensajes que llegan durante el procesamiento)
-        while True:
-            msgs = _msg_buffer.pop(session_key, [])
-            _msg_timers.pop(session_key, None)
-            if not msgs:
-                break
+        wa_id  = msgs[0]["wa_id"]
+        nombre = msgs[0]["nombre"]
 
-            wa_id  = msgs[0]["wa_id"]
-            nombre = msgs[0]["nombre"]
+        # Combinar textos (ignorar "[imagen]" si hay texto real)
+        textos = [m["texto"] for m in msgs
+                  if m.get("texto") and m["texto"] not in ("", "[imagen]", "[imagen: comprobante]")]
+        texto_combinado = "\n".join(textos) if textos else ""
 
-            # Combinar textos (ignorar "[imagen]" si hay texto real)
-            textos = [m["texto"] for m in msgs
-                      if m.get("texto") and m["texto"] not in ("", "[imagen]", "[imagen: comprobante]")]
-            texto_combinado = "\n".join(textos) if textos else ""
+        # Recolectar TODAS las imágenes del buffer en orden de llegada
+        imagenes = [
+            {"b64": m["imagen_b64"], "mime": m.get("imagen_mime", "image/jpeg")}
+            for m in msgs if m.get("imagen_b64")
+        ]
+        if imagenes and not texto_combinado:
+            texto_combinado = "[imagen]"
 
-            # Recolectar TODAS las imágenes del buffer en orden de llegada
-            imagenes = [
-                {"b64": m["imagen_b64"], "mime": m.get("imagen_mime", "image/jpeg")}
-                for m in msgs if m.get("imagen_b64")
-            ]
-            if imagenes and not texto_combinado:
-                texto_combinado = "[imagen]"
+        if not texto_combinado and not imagenes:
+            return
 
-            if not texto_combinado and not imagenes:
-                break
+        if len(msgs) > 1:
+            n_imgs = len(imagenes)
+            img_info = f", {n_imgs} imagen(es)" if n_imgs else ""
+            print(f"[Bot] Buffer: {len(msgs)} msgs de {wa_id} combinados → '{texto_combinado[:80]}'{img_info}")
 
-            if len(msgs) > 1:
-                n_imgs = len(imagenes)
-                img_info = f", {n_imgs} imagen(es)" if n_imgs else ""
-                print(f"[Bot] Buffer: {len(msgs)} msgs de {wa_id} combinados → '{texto_combinado[:80]}'{img_info}")
-
+        try:
+            respuesta = await procesar_mensaje(
+                session_id  = session_key,
+                wa_id       = wa_id,
+                texto       = texto_combinado,
+                nombre      = nombre,
+                rest_config = rest_config,
+                api         = api,
+                imagenes    = imagenes or None,
+            )
+            if not respuesta:
+                print(f"[Bot] Modo silencio activo para {wa_id} — respuesta ignorada")
+                return
+            ok = await enviar_mensaje(wa_id, respuesta, phone_id=phone_id)
+            if ok:
+                print(f"[Bot] Respuesta enviada a {wa_id}")
+                await api.registrar_mensaje(wa_id, nombre, "saliente", respuesta, origen="bot")
+            else:
+                print(f"[Bot] Error enviando respuesta a {wa_id}")
+        except Exception as e:
+            print(f"[Bot] Error procesando buffer de {wa_id}: {e}")
             try:
-                respuesta = await procesar_mensaje(
-                    session_id  = session_key,
-                    wa_id       = wa_id,
-                    texto       = texto_combinado,
-                    nombre      = nombre,
-                    rest_config = rest_config,
-                    api         = api,
-                    imagenes    = imagenes or None,
+                await enviar_mensaje(
+                    wa_id,
+                    "Lo siento, tuve un problema técnico. Por favor intenta nuevamente.",
+                    phone_id=phone_id
                 )
-                if not respuesta:
-                    print(f"[Bot] Modo silencio activo para {wa_id} — respuesta ignorada")
-                    break
-                ok = await enviar_mensaje(wa_id, respuesta, phone_id=phone_id)
-                if ok:
-                    print(f"[Bot] Respuesta enviada a {wa_id}")
-                    await api.registrar_mensaje(wa_id, nombre, "saliente", respuesta, origen="bot")
-                else:
-                    print(f"[Bot] Error enviando respuesta a {wa_id}")
-            except Exception as e:
-                print(f"[Bot] Error procesando buffer de {wa_id}: {e}")
-                try:
-                    await enviar_mensaje(
-                        wa_id,
-                        "Lo siento, tuve un problema técnico. Por favor intenta nuevamente.",
-                        phone_id=phone_id
-                    )
-                except Exception:
-                    pass
-                break
-
-            # Si llegaron mensajes durante el procesamiento, su propio timer los manejará.
-            # No los procesamos aquí para evitar dobles respuestas en rápida sucesión.
-            break
-    finally:
-        _processing.discard(session_key)
+            except Exception:
+                pass
 
 
 async def _procesar_en_background(body: dict):

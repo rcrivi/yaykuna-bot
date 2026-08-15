@@ -240,9 +240,18 @@ def _build_system_prompt(rest_config: dict) -> str:
         "  * Nombre: si ya lo tienes en el contexto, usalo directamente sin preguntarlo.\n"
         "    Si NO lo tienes, pide SOLO el nombre con una pregunta corta -- nada mas.\n"
         "  Llama crear_pedido en cuanto tengas los items y (si aplica) el nombre.\n"
-        "- HORA DE RETIRO: usa SIEMPRE la 'Hora local' del CONTEXTO ACTUAL (no la hora UTC ni otra).\n"
-        "  Si la Hora local del contexto dice 17:00, la hora de retiro es 17:00 + 30 min = 17:30.\n"
-        "  Si el cliente no menciona hora de retiro, calcula hora_local_contexto + 30 min y usala sin preguntar.\n"
+        "- HERRAMIENTAS Y PEDIDOS — REGLA CRITICA:\n"
+        "  verificar_disponibilidad es EXCLUSIVA para RESERVAS DE MESA. NUNCA la uses para pedidos\n"
+        "  de comida o bebida para llevar. Los pedidos van SIEMPRE directamente a crear_pedido.\n"
+        "- HORA DE RETIRO:\n"
+        "  * Si el cliente da una hora exacta ('a las 17:00', 'para las 6', 'a las 5 de la tarde'): usa esa hora.\n"
+        "  * Si el cliente NO menciona hora: calcula hora_local_contexto + tiempo_preparacion y usala sin preguntar.\n"
+        "  * EXCEPCION — pregunta la hora antes de crear el pedido si el cliente dice frases que implican retiro posterior:\n"
+        "    'para la tarde', 'para la noche', 'mas tarde', 'con anticipacion', 'para mas tarde',\n"
+        "    'no es para ahora', 'lo recojo despues', o pregunta sobre anticipacion ('se pide con anticipacion').\n"
+        "    En ese caso pregunta: '¿A que hora pasas a buscarlo?' ANTES de llamar crear_pedido.\n"
+        "  * Si el cliente ya tiene un pedido creado y cambia la hora de retiro, usa modificar_pedido\n"
+        "    para actualizar las notas con la nueva hora — no le digas solo verbalmente, actualiza el sistema.\n"
         "- Al confirmar el pedido (crear_pedido), muestra el resumen final: items, total y HORA EXACTA de retiro.\n"
         "  NUNCA digas '20-30 minutos' ni rangos de tiempo -- usa SIEMPRE la hora calculada exacta.\n"
         "  EXCEPCION IMPORTANTE: si el resultado de crear_pedido incluye el campo 'requiere_transferencia': true,\n"
@@ -1030,6 +1039,18 @@ TOOLS = [
         }
     },
     {
+        "name": "modificar_pedido",
+        "description": "Actualiza las notas de un pedido existente: hora de retiro, instrucciones especiales, etc. Usar cuando el cliente cambia la hora a la que va a buscar su pedido, o agrega indicaciones especiales. SIEMPRE actualizar el sistema — no solo confirmar verbalmente.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "pedido_id": {"type": "integer", "description": "ID del pedido a modificar. Si no se provee, se toma del pedido activo de la sesion."},
+                "notas":     {"type": "string",  "description": "Nuevas notas del pedido, incluyendo la hora de retiro. Ej: 'Retiro: 17:00'"}
+            },
+            "required": ["notas"]
+        }
+    },
+    {
         "name": "agregar_items_pedido",
         "description": "Agrega uno o mas items a un pedido ya existente (funciona con cualquier estado: pendiente, confirmado, listo, etc). Usar cuando el cliente quiere agregar algo a un pedido que ya fue registrado. NO crear un pedido nuevo en ese caso.",
         "input_schema": {
@@ -1289,6 +1310,18 @@ async def ejecutar_herramienta(nombre: str, args: dict,
                 sesion = _get_sesion(session_id)
                 sesion["pedido_id"] = int(data["id"])
             return json.dumps(data, ensure_ascii=False)
+
+        elif nombre == "modificar_pedido":
+            sesion    = _get_sesion(session_id)
+            pedido_id = args.get("pedido_id") or sesion.get("pedido_id")
+            notas     = args.get("notas", "")
+            if not pedido_id:
+                return json.dumps({"error": "No hay pedido activo en la sesion para modificar"}, ensure_ascii=False)
+            resultado = await api.modificar_notas_pedido(int(pedido_id), notas)
+            if resultado.get("ok"):
+                print(f"[Bot] modificar_pedido #{pedido_id} → notas='{notas}'")
+                return json.dumps({"ok": True, "pedido_id": pedido_id, "notas": notas}, ensure_ascii=False)
+            return json.dumps({"error": resultado.get("error", "Error al actualizar el pedido")}, ensure_ascii=False)
 
         elif nombre == "agregar_items_pedido":
             sesion = _get_sesion(session_id)
