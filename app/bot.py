@@ -1125,8 +1125,13 @@ async def ejecutar_herramienta(nombre: str, args: dict,
                 try:
                     await api.confirmar_reserva(reserva_id)
                     reserva["status"] = "confirmed"
+                    print(f"[Bot] Reserva #{reserva_id} confirmada OK")
                 except Exception as e:
-                    print(f"[Bot] No se pudo confirmar reserva {reserva_id}: {e}")
+                    import httpx as _httpx
+                    if isinstance(e, _httpx.HTTPStatusError):
+                        print(f"[Bot] No se pudo confirmar reserva {reserva_id}: HTTP {e.response.status_code} — {e.response.text[:200]}")
+                    else:
+                        print(f"[Bot] No se pudo confirmar reserva {reserva_id}: {type(e).__name__}: {e}")
             return json.dumps(reserva, ensure_ascii=False)
 
         elif nombre == "buscar_reserva":
