@@ -345,6 +345,26 @@ async def lifespan(app: FastAPI):
     global _flujo_task
     restaurantes_activos = list(RESTAURANTES.keys())
     print(f"[Bot] Iniciando servidor -- {len(restaurantes_activos)} restaurante(s): {restaurantes_activos}")
+
+    # Layer 3 — Observabilidad de timezone (detecta errores de DST inmediatamente)
+    try:
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        for pid, cfg in RESTAURANTES.items():
+            tz_str = cfg.get("zona_horaria", "America/Santiago")
+            tz = ZoneInfo(tz_str)
+            now_local = datetime.now(tz)
+            utc_offset = now_local.utcoffset()
+            offset_hours = utc_offset.total_seconds() / 3600
+            nombre = cfg.get("nombre", pid)
+            print(
+                f"[Timezone] {nombre} | tz={tz_str} | "
+                f"ahora={now_local.strftime('%Y-%m-%d %H:%M:%S %Z')} | "
+                f"UTC{offset_hours:+.1f}h"
+            )
+    except Exception as _tz_err:
+        print(f"[Timezone] Error al calcular timezone: {_tz_err}")
+
     _flujo_task = asyncio.create_task(_loop_followup())
     yield
     if _flujo_task:
