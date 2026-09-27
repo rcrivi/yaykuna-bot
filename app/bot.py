@@ -1440,7 +1440,7 @@ async def procesar_mensaje(session_id: str, wa_id: str, texto: str,
         sesion["amenaza_detectada"] = True
         print(f"[Bot] PRE-FILTRO AMENAZA — sesion {session_id} — keyword detectado — enviando respuesta institucional")
         try:
-            tz_amenaza = ZoneInfo(rest_config.get("zona_horaria", "America/Santiago"))
+            tz_amenaza = ZoneInfo(config_pub.get("zona_horaria") or rest_config.get("zona_horaria", "America/Santiago"))
             hora_amenaza = datetime.now(tz_amenaza).strftime("%H:%M")
             await api.registrar_escalado(
                 wa_id   = wa_id,
@@ -1594,6 +1594,8 @@ async def procesar_mensaje(session_id: str, wa_id: str, texto: str,
         effective_config["tipo_servicio"] = config_pub["tipo_servicio"]
     if config_pub.get("tiempo_preparacion"):
         effective_config["tiempo_preparacion"] = int(config_pub["tiempo_preparacion"])
+    if config_pub.get("zona_horaria"):
+        effective_config["zona_horaria"] = config_pub["zona_horaria"]
     # Campos carta y ubicacion siempre se toman desde la DB (pueden cambiar desde el panel)
     for _k in ("carta_pdf_url", "carta_url_activa", "carta_pdf_url_activa",
                "ubicacion_lat", "ubicacion_lng", "ubicacion_nombre",
