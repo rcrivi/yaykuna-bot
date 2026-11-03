@@ -24,6 +24,8 @@ class ApiClient:
         self._token: Optional[str] = None
         self._config_cache: dict = {}
         self._config_cache_ts: float = 0.0
+        # keywords: lista de {fecha, palabras_clave: [str], comportamiento, motivo}
+        self.eventos_keywords: list[dict] = []
 
     # ── Autenticacion ──────────────────────────────────────────
 
@@ -164,6 +166,33 @@ class ApiClient:
                 )
             r.raise_for_status()
             return r.json()
+
+    # ── Keywords de eventos ────────────────────────────────────
+
+    async def cargar_keywords(self) -> None:
+        """Carga las palabras clave de fechas bloqueadas desde la API.
+        Llamar al arrancar el bot y periódicamente para refrescar."""
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                r = await client.get(f"{self._url}/disponibilidad/keywords")
+                if r.status_code == 200:
+                    data = r.json()
+                    self.eventos_keywords = data.get("eventos", [])
+                    print(f"[ApiClient] Keywords cargados: {len(self.eventos_keywords)} evento(s)")
+                else:
+                    print(f"[ApiClient] cargar_keywords HTTP {r.status_code}")
+        except Exception as e:
+            print(f"[ApiClient] cargar_keywords ERROR: {type(e).__name__}: {e}")
+
+    def detectar_fecha_por_keyword(self, texto: str) -> Optional[str]:
+        """Dado un texto del cliente, retorna la fecha (YYYY-MM-DD) si alguna
+        palabra clave de un evento bloqueado aparece en el texto."""
+        texto_lower = texto.lower()
+        for evento in self.eventos_keywords:
+            for kw in evento.get("palabras_clave", []):
+                if kw.lower() in texto_lower:
+                    return evento["fecha"]
+        return None
 
     # ── Endpoints del bot (X-Bot-Secret) ──────────────────────
 

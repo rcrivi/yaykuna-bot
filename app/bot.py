@@ -271,11 +271,14 @@ def _build_system_prompt(rest_config: dict) -> str:
         "  con max_por_horario ni se lo menciones al cliente. IGNORALO completamente.\n"
         "\n"
         "## INTERPRETACION DE FECHAS ESPECIALES\n"
-        "Cuando el cliente dice 'año nuevo', 'noche de año nuevo', 'nochevieja', '31', '31 de diciembre':\n"
-        "  → La fecha es SIEMPRE el 31 de diciembre (no el 1 de enero).\n"
-        "  En gastronomia, 'año nuevo' = la cena/fiesta del 31. El 1 de enero no es fecha de evento.\n"
-        "Cuando dice 'navidad', 'nochebuena', '24 de diciembre': → fecha es el 24 de diciembre.\n"
-        "Cuando dice 'año nuevo' y quiere el 1 de enero, lo dira explicitamente ('almuerzo del 1 de enero').\n"
+        "El sistema te entrega en el contexto las palabras clave configuradas por el admin para cada\n"
+        "fecha bloqueada (eventos especiales). Cuando el cliente mencione cualquiera de esas palabras\n"
+        "clave, trata ese mensaje como si hubiera dado la fecha exacta del evento.\n"
+        "Reglas generales (validas siempre que no haya keyword configurado):\n"
+        "- 'año nuevo', 'nochevieja', 'noche de año nuevo', '31 de diciembre', '31 dic' → 31 de diciembre.\n"
+        "  En gastronomia, 'año nuevo' = cena del 31, NO el 1 de enero.\n"
+        "- 'navidad', 'nochebuena', '24 de diciembre' → 24 de diciembre.\n"
+        "- Si el cliente quiere el 1 de enero lo dira explicitamente ('almuerzo del 1 de enero').\n"
         "\n"
         "## FLUJO DE RESERVA — MAXIMO 2 TURNOS PARA CERRAR\n"
         "TURNO 0 (CRITICO) — en cuanto el cliente menciona una FECHA o fecha especial (año nuevo, navidad, etc):\n"
@@ -1680,6 +1683,20 @@ async def procesar_mensaje(session_id: str, wa_id: str, texto: str,
             "  → Crea el pedido y entrega los datos bancarios en el mismo mensaje de confirmacion.\n"
             "REGLA CRITICA: NUNCA preguntes al cliente el monto a transferir — ya lo tienes del pedido.\n"
             "REGLA CRITICA: NUNCA inventes datos bancarios — usa SIEMPRE los de esta seccion.\n"
+        )
+
+    # Inyectar keywords de eventos bloqueados si hay alguno configurado
+    if api.eventos_keywords:
+        kw_lines = []
+        for ev in api.eventos_keywords:
+            kws = ", ".join(ev.get("palabras_clave", []))
+            kw_lines.append(f"  - fecha {ev['fecha']}: {kws}")
+        system_dynamic += (
+            "\n---\n"
+            "## EVENTOS ESPECIALES — PALABRAS CLAVE\n"
+            "Cuando el cliente mencione alguna de estas palabras, trátala como si hubiera dado\n"
+            "la fecha exacta del evento y llama verificar_disponibilidad de inmediato:\n"
+            + "\n".join(kw_lines) + "\n"
         )
 
     max_iteraciones = 6  # +1 para absorber posible retry del guardrail
