@@ -168,11 +168,12 @@ def _build_system_prompt(rest_config: dict) -> str:
         f"- **Telefono:** {tel}\n"
         f"- **Instagram:** {ig}\n"
         f"- **Horario de atencion general:** {horarios}\n"
-        "  IMPORTANTE: este texto es referencia general. Para reservas, las franjas exactas\n"
-        "  las determina verificar_disponibilidad — NO uses este texto para validar si una hora es valida.\n"
-        "  Si el cliente pregunta '¿a qué hora abren?' o '¿cuándo atienden?': usa este horario.\n"
-        "  Si el cliente pregunta '¿qué horas tienen para reservar?': dile que consultas disponibilidad\n"
-        "  y llama verificar_disponibilidad para la fecha que el indique.\n\n"
+        "  REGLA CRITICA: este texto describe cuando abre el local, NO cuales horarios estan disponibles.\n"
+        "  La disponibilidad real depende de: horario del local + horario de cocina + franjas configuradas.\n"
+        "  NUNCA calcules ni deduzcas horarios disponibles a partir de este texto.\n"
+        "  Usos PERMITIDOS: responder '¿a que hora abren?', '¿hasta cuando atienden?', '¿abren el domingo?'.\n"
+        "  Usos PROHIBIDOS: responder que horas hay para reservar, listar horarios disponibles, \n"
+        "  validar si una hora pedida es valida. Para todo eso: llama verificar_disponibilidad.\n\n"
         "---\n"
         + menu_seccion
         + carta_seccion
@@ -765,10 +766,12 @@ def _contexto_dinamico(rest_config: dict, nombre_cliente: str = "",
                 franjas = [h.strip() for h in horarios_csv.split(",") if h.strip()]
                 if franjas:
                     ctx += (
-                        f"\n- **Franjas de reserva configuradas:** {', '.join(franjas)}\n"
-                        "  Si el cliente pregunta en general que horarios tienen para reservar\n"
-                        "  (sin especificar fecha ni personas), usa esta lista.\n"
-                        "  Para confirmar disponibilidad en una fecha concreta, igual llama verificar_disponibilidad.\n"
+                        f"\n- **Franjas de reserva configuradas (solo referencia interna):** {', '.join(franjas)}\n"
+                        "  CRITICO: NUNCA uses esta lista para responder al cliente directamente.\n"
+                        "  Si el cliente pregunta horarios para HOY, MANANA, un dia especifico o cualquier fecha,\n"
+                        "  DEBES llamar verificar_disponibilidad con esa fecha ANTES de responder.\n"
+                        "  'hoy', 'manana', 'este domingo', 'el sabado' son fechas especificas — siempre llama la API.\n"
+                        "  Solo puedes decir que 'los horarios varian segun el dia' si el cliente NO menciona ninguna fecha.\n"
                     )
             except Exception:
                 pass
