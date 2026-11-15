@@ -168,8 +168,8 @@ async def _loop_followup():
                 if not flujo.get("flujo_activo", 1):
                     continue
 
-                min_reserva = int(flujo.get("flujo_followup_reserva", 7))
-                min_pedido  = int(flujo.get("flujo_followup_pedido",  3))
+                min_reserva = max(5, int(flujo.get("flujo_followup_reserva", 7)))
+                min_pedido  = max(5, int(flujo.get("flujo_followup_pedido",  5)))
 
                 prefix = f"{phone_id}:"
                 for session_id, sesion in list(_sesiones_bot.items()):
@@ -364,6 +364,13 @@ async def lifespan(app: FastAPI):
             )
     except Exception as _tz_err:
         print(f"[Timezone] Error al calcular timezone: {_tz_err}")
+
+    # Cargar keywords de eventos desde la API de cada restaurante
+    for _pid, _api in _api_clients.items():
+        try:
+            await _api.cargar_keywords()
+        except Exception as _kw_err:
+            print(f"[Bot] Error cargando keywords para {_pid}: {_kw_err}")
 
     _flujo_task = asyncio.create_task(_loop_followup())
     yield

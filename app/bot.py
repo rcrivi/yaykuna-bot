@@ -638,7 +638,9 @@ def _contexto_dinamico(rest_config: dict, nombre_cliente: str = "",
                             f"DEBES informar al cliente que el local esta cerrado y que abre a las {_h_abre} hrs. "
                             f"PUEDES tomar pedidos: la hora de retiro es {_h_retiro} hrs ({_h_abre} + {_mins_prep} min de preparacion). "
                             f"Al confirmar el pedido usa SIEMPRE {_h_retiro} como hora de retiro — no calcules otra. "
-                            f"NO tomes reservas para hoy — solo para fechas futuras. "
+                            f"RESERVAS PARA HOY: SI el cliente pide reserva para hoy a una hora POSTERIOR a {_h_abre}, "
+                            f"llama verificar_disponibilidad de inmediato — NO digas que no hay lugar sin consultar primero. "
+                            f"NUNCA rechaces ni pongas en duda una reserva futura basandote en la hora actual. "
                             f"Tono correcto al recibir un pedido: 'Buenas noches! El restaurante esta cerrado ahora, "
                             f"pero abrimos hoy a las {_h_abre} hrs. Con gusto te anoto el pedido para retirar a las {_h_retiro}.']\n"
                         )
