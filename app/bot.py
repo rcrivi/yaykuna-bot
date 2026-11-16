@@ -80,7 +80,12 @@ def _build_system_prompt(rest_config: dict) -> str:
     direccion = rest_config.get("direccion", "")
     tel       = rest_config.get("tel",       "")
     ig        = rest_config.get("ig",        "")
-    horarios  = rest_config.get("horarios",  "Lunes a Sabado 12:30-23:00 hrs - Domingo 12:30-17:00 hrs")
+    _hor_raw  = rest_config.get("horarios",  "")
+    # horarios puede ser lista de objetos [{h,turno}] o string CSV legado
+    if isinstance(_hor_raw, list):
+        horarios = ", ".join(x["h"] for x in _hor_raw if isinstance(x, dict) and x.get("h")) or "Lunes a Sabado 12:30-23:00 hrs - Domingo 12:30-17:00 hrs"
+    else:
+        horarios = _hor_raw or "Lunes a Sabado 12:30-23:00 hrs - Domingo 12:30-17:00 hrs"
     carta_url            = rest_config.get("carta_url", "")
     carta_url_activa     = str(rest_config.get("carta_url_activa",     "1")) != "0"
     carta_pdf_url        = rest_config.get("carta_pdf_url", "")
@@ -769,7 +774,11 @@ def _contexto_dinamico(rest_config: dict, nombre_cliente: str = "",
 
     # Franjas de reserva configuradas (para preguntas genéricas sin fecha específica)
     if config_pub:
-        horarios_csv = config_pub.get("horarios", "")
+        _h_raw = config_pub.get("horarios", "")
+        if isinstance(_h_raw, list):
+            horarios_csv = ",".join(x["h"] for x in _h_raw if isinstance(x, dict) and x.get("h"))
+        else:
+            horarios_csv = _h_raw or ""
         if horarios_csv and "," in horarios_csv:
             try:
                 franjas = [h.strip() for h in horarios_csv.split(",") if h.strip()]
